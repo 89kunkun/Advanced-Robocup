@@ -1,0 +1,4 @@
+<launch>
+    <rosparam file="$(find grasp)/launch/config/grasp_try.yaml" command="load" />
+    <node name="grasp_try" pkg="grasp" type="grasp_try" output="screen" />
+</launch>

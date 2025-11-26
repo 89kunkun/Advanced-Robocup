@@ -1,0 +1,14 @@
+target_label: 1    #bottel
+#target_label: 2  #cup
+
+x_offset: -0.25
+y_offset: 0.02
+z_offset: 0.02
+
+grasp_roll: -1.57
+grasp_pitch: 0
+grasp_yaw: 1.57
+
+pregrasp_offset_x : 0.0
+pregrasp_offset_y : 0.0
+pregrasp_offset_z : 0.0
