@@ -1,0 +1,3 @@
+pre_pass_filter: [0.35 ,1.0]
+ransac_threshold: 0.015
+seg_pass_filter: [0.01, 0.3]
