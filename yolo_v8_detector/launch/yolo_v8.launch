@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<launch>
+    <!-- 启动本机摄像头
+    <node pkg="usb_cam" type="usb_cam_node" name="usb_cam" output="screen">
+    <param name="video_device" value="/dev/video0" />
+    <param name="image_width" value="640" />
+    <param name="image_height" value="480" />
+    <param name="pixel_format" value="yuyv" />
+    <param name="camera_frame_id" value="usb_cam" />
+    </node> -->
+
+  <!-- 输入图像 topic -->
+  <arg name="image_topic" default="/xtion/rgb/image_raw"/>
+  <!-- <arg name="image_topic" default="/usb_cam/image_raw"/> -->
+  
+  <!-- YOLOv8 权重文件路径 -->
+  <arg name="weights" default="$(find yolo_v8_detector)/weights/yolov8n.pt"/>
+
+  <!-- YOLO 模型名称（n / s / m / l / x） -->
+  <arg name="model" default="yolov8n"/>
+
+  <!-- 是否输出 debug 图像 -->
+  <arg name="publish_image" default="true"/>
+
+  <!-- 启动 Python YOLOv8 节点 -->
+  <node pkg="yolo_v8_detector"
+        type="yolo_v8_node.py"
+        name="yolo_v8_node"
+        output="screen">
+
+    <!-- 设置参数 -->
+    <param name="image_topic" value="$(arg image_topic)" />
+    <param name="weights_path" value="$(arg weights)" />
+    <param name="model_name" value="$(arg model)" />
+    <param name="publish_debug_image" value="$(arg publish_image)" />
+
+  </node>
+
+</launch>
