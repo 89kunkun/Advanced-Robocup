@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 
 <launch>
-    <!-- 启动本机摄像头
-    <node pkg="usb_cam" type="usb_cam_node" name="usb_cam" output="screen">
+    <!-- 启动本机摄像头 -->
+    <!-- <node pkg="usb_cam" type="usb_cam_node" name="usb_cam" output="screen">
     <param name="video_device" value="/dev/video0" />
     <param name="image_width" value="640" />
     <param name="image_height" value="480" />
@@ -15,7 +15,7 @@
   <!-- <arg name="image_topic" default="/usb_cam/image_raw"/> -->
   
   <!-- YOLOv8 权重文件路径 -->
-  <arg name="weights" default="$(find yolo_v8_detector)/weights/yolov8n.pt"/>
+  <arg name="weights" default="$(find yolo_v8_detector)/weights/yolov8s_seg_70epoch.pt"/>
 
   <!-- YOLO 模型名称（n / s / m / l / x） -->
   <arg name="model" default="yolov8n"/>

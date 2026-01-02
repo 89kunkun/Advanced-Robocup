@@ -11,11 +11,10 @@
 #include <visualization_msgs/MarkerArray.h>
 
 /*********************************************************************
-* darknet
+* YOLOv8 detector messages
 ********************************************************************/
-#include <darknet_ros_msgs/BoundingBoxes.h>
-#include <darknet_ros_msgs/BoundingBox.h>
-#include <darknet_ros_msgs/CheckForObjectsAction.h>
+#include <yolo_v8_detector/BoundingBoxes.h>
+#include <yolo_v8_detector/BoundingBox.h>
 
 #include <message_filters/subscriber.h>
 #include <message_filters/synchronizer.h>
@@ -51,6 +50,8 @@
 
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/highgui/highgui.hpp>
+
+#include <Eigen/Geometry>
 
 class ObjectLabeling
 {
@@ -101,7 +102,7 @@ public:
 private:
   bool labelObjects(CloudPtr& input, CloudPtrl& output);
 
-  int findMatch(const darknet_ros_msgs::BoundingBox& rect, const Eigen::MatrixXd& centroids);
+  int findMatch(const yolo_v8_detector::BoundingBox& rect, const Eigen::MatrixXd& centroids);
 
 private:
   /**
@@ -116,7 +117,7 @@ private:
    * 
    * @param msg 
    */
-  void detectionCallback(const darknet_ros_msgs::BoundingBoxesConstPtr &msg);
+  void detectionCallback(const yolo_v8_detector::BoundingBoxesConstPtr &msg);
 
   /**
    * @brief camerainfo callback
@@ -125,10 +126,20 @@ private:
    */
   void cameraInfoCallback(const sensor_msgs::CameraInfoConstPtr &msg);
 
+  /**
+   * @brief table plane pointcloud callback
+   *
+   * @param msg
+   */
+  void tableCloudCallback(const sensor_msgs::PointCloud2ConstPtr &msg);
+
 private:
 
   bool is_cloud_updated_;                   //!< new pointcloud is recived
   bool has_camera_info_;                    //!< camera info recived
+  bool has_plate_center_ = false;
+  bool has_table_center_ = false;
+
   std::string camera_frame_;                //!< camera frame name
   std::string objects_cloud_topic_;         //!< objects cloud topic name
   std::string camera_info_topic_;           //!< camera info topic name
@@ -138,19 +149,31 @@ private:
   ros::Subscriber object_detections_sub_;   //!< sub detections form detector
   ros::Subscriber object_point_cloud_sub_;  //!< sub point cloud from plane segmentation
   ros::Subscriber camera_info_sub_;         //!< sub camera info
+  ros::Subscriber table_cloud_sub_;        //!< sub table point cloud
 
   ros::Publisher labeled_object_cloud_pub_; //!< publisher for labeled pointcloud
   ros::Publisher text_marker_pub_;
   ros::Publisher centroid_pub_;
 
+  ros::Publisher table_center_pub_;
+  ros::Publisher table_center_marker_pub_;
 
+  ros::Publisher plate_cloud_pub_;
+  ros::Publisher plate_center_pub_;
+
+  geometry_msgs::PointStamped table_center_;
+  geometry_msgs::PointStamped plate_center_;
+  
   // outputs
+  CloudPtr table_cloud_;
+  CloudPtr plate_cloud_;
+
   CloudPtrl labeled_point_cloud_;                 //!< labeled pointcloud (pointcloud that knows the object type)
   visualization_msgs::MarkerArray text_markers_;  //!< text markers for rviz
 
   // inputs 
-  CloudPtr object_point_cloud_;                             //!< objects point cloud
-  std::vector<darknet_ros_msgs::BoundingBox> detections_;   //!< vector of bounding boxes in 2d image
+  CloudPtr object_point_cloud_;                           //!< objects point cloud
+  std::vector<yolo_v8_detector::BoundingBox> detections_; //!< vector of bounding boxes in 2d image
 
   tf::TransformListener tfListener_;        //!< access to tf tree for ros transformations
 

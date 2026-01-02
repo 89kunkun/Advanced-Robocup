@@ -1,5 +1,5 @@
-target_label: 1    #bottel
-#target_label: 2  #cup
+target_label: "bottle"    #bottle
+#target_label: "cup"  #cup
 
 x_offset: -0.25
 y_offset: 0.02

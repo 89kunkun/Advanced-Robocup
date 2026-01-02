@@ -63,6 +63,7 @@ private:
 
         bool moveArmToTarget(const geometry_msgs::PoseStamped& target);
         void closeGripper();
+        void openGripper();
         bool grasp(const sensor_msgs::PointCloud2ConstPtr& msg, int traget_label);
         // bool moveArmToTargetCartesian(const geometry_msgs::PoseStamped& target);
         // bool moveEndEffectorStraightX(double distance);
@@ -83,6 +84,9 @@ private:
         sensor_msgs::PointCloud2ConstPtr cached_cloud_;
         bool got_cloud_ = false;
 
+        geometry_msgs::Point table_center_;
+        bool has_table_center_ = false;
+
         //
         moveit::planning_interface::PlanningSceneInterface planning_scene_interface_;
         ros::Subscriber table_cloud_sub_;
@@ -92,4 +96,3 @@ private:
 };
 
 #endif // GRASP_H
-

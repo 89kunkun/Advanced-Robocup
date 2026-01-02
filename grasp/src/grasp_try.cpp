@@ -14,7 +14,7 @@ void TiagoJointCommander::moveArm()
 {
     std::vector<double> arm_positions;
     if (!nh_.getParam("arm_positions", arm_positions) || arm_positions.size() != 7) {
-        ROS_WARN("defaul arm_positions");
+        ROS_WARN("使用默认arm_positions");
         arm_positions = {0.4, -1.17, -1.9, 2.3, -1.3, -0.45, 0.0};
     }
 

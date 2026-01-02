@@ -9,7 +9,7 @@ project(object_labeling)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS
   cv_bridge
-  darknet_ros_msgs
+  yolo_v8_detector
   image_geometry
   roscpp
   sensor_msgs
@@ -76,7 +76,7 @@ find_package(PCL REQUIRED)
 ## Generate added messages and services with any dependencies listed here
 # generate_messages(
 #   DEPENDENCIES
-#   darknet_ros_msgs#   sensor_msgs
+#   sensor_msgs
 # )
 
 ################################################
@@ -111,7 +111,7 @@ find_package(PCL REQUIRED)
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES object_labeling
-  CATKIN_DEPENDS cv_bridge darknet_ros_msgs image_geometry roscpp sensor_msgs tf tf_conversions
+  CATKIN_DEPENDS cv_bridge yolo_v8_detector image_geometry roscpp sensor_msgs tf tf_conversions
 #  DEPENDS system_lib
 )
 
@@ -176,10 +176,10 @@ target_link_libraries(${PROJECT_NAME}_node
 
 ## Mark executable scripts (Python etc.) for installation
 ## in contrast to setup.py, you can choose the destination
-# catkin_install_python(PROGRAMS
-#   scripts/my_python_script
-#   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-# )
+catkin_install_python(PROGRAMS
+  scripts/object_labeling_seg.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
 
 ## Mark executables for installation
 ## See http://docs.ros.org/melodic/api/catkin/html/howto/format1/building_executables.html

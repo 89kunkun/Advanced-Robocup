@@ -7,7 +7,7 @@ Grasper::Grasper(ros::NodeHandle& nh)
 
     move_group_.setPoseReferenceFrame("base_link");
     move_group_.setEndEffectorLink("gripper_link");
-    move_group_.setGoalTolerance(0.03);
+    move_group_.setGoalTolerance(0.02);
     move_group_.setMaxVelocityScalingFactor(0.3);
     move_group_.setPlanningTime(15.0);
     move_group_.setStartStateToCurrentState();
@@ -41,12 +41,12 @@ void Grasper::pointCloudCallback(const sensor_msgs::PointCloud2ConstPtr& msg)
 
 void Grasper::tableCloudCallback(const sensor_msgs::PointCloud2ConstPtr& msg)
 {
-    // 1. Point cloud conversion
+    // 1. pointcloud2 -> pcl pointcloud
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::fromROSMsg(*msg, *cloud);
     if(cloud->empty()) return;
 
-    // 2. Fitting plane
+    // 2. Fit plane
     pcl::SACSegmentation<pcl::PointXYZ> seg;
     seg.setOptimizeCoefficients(true);
     seg.setModelType(pcl::SACMODEL_PLANE);
@@ -58,47 +58,59 @@ void Grasper::tableCloudCallback(const sensor_msgs::PointCloud2ConstPtr& msg)
     seg.segment(*inliers, *coefficients);
     if(inliers->indices.empty()) return;
 
+    // 3. Extract inliers min/max
     pcl::ExtractIndices<pcl::PointXYZ> extract;
     extract.setInputCloud(cloud);
     extract.setIndices(inliers);
     pcl::PointCloud<pcl::PointXYZ>::Ptr table_inlier_cloud(new pcl::PointCloud<pcl::PointXYZ>);
     extract.filter(*table_inlier_cloud);
 
-    // 3. Calculate desktop bounding box
+    // Compute bounding box
     pcl::PointXYZ min_pt, max_pt;
     pcl::getMinMax3D(*table_inlier_cloud, min_pt, max_pt);
 
     double box_x = max_pt.x - min_pt.x;
     double box_y = max_pt.y - min_pt.y;
     double box_z = 0.4;
-    double center_x = (min_pt.x + max_pt.x) / 2.0;
-    double center_y = (min_pt.y + max_pt.y) / 2.0;
-    double center_z = max_pt.z - box_z + 0.08;
+
+    table_center_.x = (min_pt.x + max_pt.x) / 2.0;
+    table_center_.y = (min_pt.y + max_pt.y) / 2.0;
+    table_center_.z = max_pt.z - box_z + 0.08;    // slightly above surface
+
+    has_table_center_ = true;
+
+    ROS_INFO("Table center at (%.3f, %.3f, %.3f)",
+         table_center_.x,
+         table_center_.y,
+         table_center_.z);
 
     // 4.CollisionObject
     moveit_msgs::CollisionObject table_obj;
     table_obj.header.frame_id = "base_link";
     table_obj.id = "table";
+
     shape_msgs::SolidPrimitive primitive;
     primitive.type = primitive.BOX;
     primitive.dimensions = {box_x, box_y, box_z};
+
     geometry_msgs::Pose table_pose;
-    table_pose.position.x = center_x;
-    table_pose.position.y = center_y;
-    table_pose.position.z = center_z;
+    table_pose.position.x = table_center_.x;
+    table_pose.position.y = table_center_.y;
+    table_pose.position.z = table_center_.z;
     table_pose.orientation.w = 1.0;
+
     table_obj.primitives.push_back(primitive);
     table_obj.primitive_poses.push_back(table_pose);
     table_obj.operation = table_obj.ADD;
 
-    // 5.Publisher
+    // 5. publish to planning scene
     planning_scene_interface_.applyCollisionObject(table_obj);
 
     table_obstacle_initialized_ = true;
     if (table_cloud_sub_once_) table_cloud_sub_once_.shutdown();
     
-    ROS_INFO("Apply table obstacle: center(%.3f,%.3f,%.3f) size(%.3f,%.3f,%.3f)",
-         center_x, center_y, center_z, box_x, box_y, box_z);
+    ROS_INFO("[TABLE] Collision object added: size(%.3f, %.3f, %.3f)",
+             box_x, box_y, box_z);
 
 }
 
@@ -175,17 +187,61 @@ bool Grasper::grasp(const sensor_msgs::PointCloud2ConstPtr& msg, int target_labe
     ros::Duration(1.0).sleep();
 
     closeGripper();
-    ros::Duration(1.0).sleep();
+    ros::Duration(1.5).sleep();
 
-    if (!moveEndEffectorStraightDirection(0, 0, 1, 0.01))
+    if (!moveEndEffectorStraightDirection(0, 0, 1, 0.001))
     {
         ROS_ERROR("Failed to lift.");
         ros::shutdown();
         return false;
     }
-    ROS_INFO("Grasp pose done");
+    ROS_INFO("Lift done");
     ros::Duration(1.0).sleep();
-    
+
+    // ===================================================
+    // =========== MOVE TO TABLE CENTER & PLACE ===========
+    // ===================================================
+
+    if (!has_table_center_)
+    {
+        ROS_ERROR("No table center known, cannot place.");
+        ros::shutdown();
+        return false;
+    }
+
+    ROS_INFO("Moving to table center at (%.3f, %.3f)",
+             table_center_.x,
+             table_center_.y);
+
+    // -------- Move horizontally above table center ----------
+    double current_z = move_group_.getCurrentPose().pose.position.z;
+
+    geometry_msgs::PoseStamped place_above;
+    place_above.header.frame_id = "base_link";
+    place_above.pose.position.x = table_center_.x - 0.1;
+    place_above.pose.position.y = table_center_.y;
+    place_above.pose.position.z = current_z - 0.16; // keep current height
+    place_above.pose.orientation = quat; // keep same orientation
+
+    if (!moveArmToTarget(place_above)) {
+    ROS_ERROR("[PLACE] Failed to move horizontally to table center!");
+    return false;
+    }
+    ROS_INFO("Moved above table center.");
+    ros::Duration(0.5).sleep();
+
+    // ---------- Open gripper to place position ----------
+    openGripper();
+    ros::Duration(4.0).sleep();
+    ROS_INFO("Object placed.");
+
+    // ---------- Move up to retreat position ----------
+    if (!moveEndEffectorStraightDirection(0, 0, 1, 0.02)) {
+        ROS_ERROR("[PLACE] Failed straight descend!");
+        return false;
+    }
+    ROS_INFO("Descend to place position done.");
+
     ros::shutdown();
     return true;
 }
@@ -212,8 +268,13 @@ bool Grasper::grasp(const sensor_msgs::PointCloud2ConstPtr& msg, int target_labe
 // move 
 bool Grasper::moveArmToTarget(const geometry_msgs::PoseStamped& target)
 {
+    move_group_.stop();
+    move_group_.clearPoseTargets();
+    move_group_.setStartStateToCurrentState();
+
     ROS_INFO("MoveArmToTarget: setPoseTarget");
     move_group_.setPoseTarget(target);
+    move_group_.setGoalTolerance(0.01);
     move_group_.setMaxVelocityScalingFactor(0.2);  // default 0.3
     move_group_.setMaxAccelerationScalingFactor(0.1);
 
@@ -221,7 +282,7 @@ bool Grasper::moveArmToTarget(const geometry_msgs::PoseStamped& target)
     auto result = move_group_.move();
     ROS_INFO("MoveArmToTarget: move finished");
 
-    if (move_group_.move() != moveit::planning_interface::MoveItErrorCode::SUCCESS)
+    if (result != moveit::planning_interface::MoveItErrorCode::SUCCESS)
     {
         ROS_ERROR("Motion execution failed.");
         return false;
@@ -232,6 +293,12 @@ bool Grasper::moveArmToTarget(const geometry_msgs::PoseStamped& target)
 
 bool Grasper::moveEndEffectorStraightDirection(double dx, double dy, double dz, double distance)
 {
+    // Reset state so the Cartesian path starts from the real current pose
+    move_group_.stop();
+    move_group_.clearPoseTargets();
+    move_group_.setStartStateToCurrentState();
+    move_group_.setGoalTolerance(0.01);
+
     // normalized direction vector
     Eigen::Vector3d dir(dx, dy, dz);
     if (dir.norm() < 1e-6) {
@@ -241,14 +308,19 @@ bool Grasper::moveEndEffectorStraightDirection(double dx, double dy, double dz, 
     dir.normalize();
 
     // get the current end-effector pose
-    geometry_msgs::PoseStamped current_pose = move_group_.getCurrentPose(move_group_.getEndEffectorLink());
-    geometry_msgs::Pose start = current_pose.pose;
+    // geometry_msgs::PoseStamped current_pose = move_group_.getCurrentPose(move_group_.getEndEffectorLink());
+    // geometry_msgs::Pose start = current_pose.pose;
+    // geometry_msgs::Pose target = start;
+
+    geometry_msgs::Pose start = move_group_.getCurrentPose().pose;
     geometry_msgs::Pose target = start;
 
     // calculate the target point
     target.position.x += dir.x() * distance;
     target.position.y += dir.y() * distance;
     target.position.z += dir.z() * distance;
+
+    target.orientation = start.orientation; // keep same orientation
 
     std::vector<geometry_msgs::Pose> waypoints;
     waypoints.push_back(start);
@@ -282,9 +354,27 @@ void Grasper::closeGripper()
     pt.positions = {0.0, 0.0}; // close
     pt.time_from_start = ros::Duration(3.0);
     traj.points.push_back(pt);
-    traj.header.stamp = ros::Time::now() + ros::Duration(0.2);
 
+    traj.header.stamp = ros::Time::now() + ros::Duration(0.2);
     for (int i = 0; i < 3; ++i)
+    {
+        gripper_pub_.publish(traj);
+        ros::Duration(0.1).sleep();
+    }
+}
+
+void Grasper::openGripper()
+{
+    trajectory_msgs::JointTrajectory traj;
+    traj.joint_names = {"gripper_left_finger_joint", "gripper_right_finger_joint"};
+
+    trajectory_msgs::JointTrajectoryPoint pt;
+    pt.positions = {0.04, 0.04}; // open
+    pt.time_from_start = ros::Duration(3.5);
+    traj.points.push_back(pt);
+
+    traj.header.stamp = ros::Time::now() + ros::Duration(0.2);
+    for(int i = 0; i < 3; ++i)
     {
         gripper_pub_.publish(traj);
         ros::Duration(0.1).sleep();

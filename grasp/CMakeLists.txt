@@ -167,7 +167,6 @@ target_link_libraries(
 target_link_libraries(
   grasp_try ${catkin_LIBRARIES}
 )
-
 #############
 ## Install ##
 #############
@@ -179,6 +178,8 @@ target_link_libraries(
 ## in contrast to setup.py, you can choose the destination
 catkin_install_python(PROGRAMS
   scripts/tuck_arm.py
+  scripts/grasp.py
+  scripts/pca_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
