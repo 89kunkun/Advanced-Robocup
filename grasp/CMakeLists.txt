@@ -180,6 +180,8 @@ catkin_install_python(PROGRAMS
   scripts/tuck_arm.py
   scripts/grasp.py
   scripts/pca_node.py
+  scripts/grasp_pre.py
+  scripts/grasp_pca.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

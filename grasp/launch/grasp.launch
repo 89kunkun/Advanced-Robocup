@@ -1,8 +1,6 @@
 <launch>
-  <!-- Load grasping parameters -->
-  <rosparam file="$(find grasp)/launch/config/grasp_left.yaml" command="load" />
 
   <!-- Start the grasping node -->
-  <node name="grasp" pkg="grasp" type="grasp.py"  output="screen"/>
+  <node name="grasp_pca" pkg="grasp" type="grasp_pca.py"  output="screen"/>
 
 </launch>

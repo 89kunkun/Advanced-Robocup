@@ -343,7 +343,10 @@ class ObjectLabelingPy:
             markers.markers.append(mk)
 
             # --- Publish centroid ---
-            cps = PointStamped(header=self.objects_header)
+            # cps = PointStamped(header=self.objects_header).
+            cps = PointStamped()
+            cps.header.frame_id = self.objects_header.frame_id
+            cps.header.stamp = self.objects_header.stamp
             cps.point.x, cps.point.y, cps.point.z = centroid
             self.pub_centroid.publish(cps)
 
@@ -353,7 +356,7 @@ class ObjectLabelingPy:
         self.pub_labeled.publish(
             xyzl_to_pc2(self.objects_pts, labels_out,
                         self.objects_header.frame_id,
-                        rospy.Time.now())
+                        self.objects_header.stamp)
         )
 
     # ========================================================

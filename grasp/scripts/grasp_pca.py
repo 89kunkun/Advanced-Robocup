@@ -9,6 +9,7 @@ import tf2_geometry_msgs
 from geometry_msgs.msg import PoseStamped, PointStamped, Point
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from visualization_msgs.msg import Marker
+from std_msgs.msg import Float64MultiArray
 
 import moveit_commander
 from moveit_commander import PlanningSceneInterface
@@ -17,12 +18,13 @@ from moveit_msgs.msg import RobotTrajectory
 
 class GrasperPy:
     """
-    Centroid-based grasp + place
+    PCA-driven grasp + fixed-orientation place
 
     Inputs:
-      - /cluster_centroid : geometry_msgs/PointStamped
-      - /plate_center     : geometry_msgs/PointStamped   (optional)
-      - /table_center     : geometry_msgs/PointStamped   (recommended)
+      - /pca_object_centroid : geometry_msgs/PointStamped
+      - /calculated_pca_axis : std_msgs/Float64MultiArray  (3x3)
+      - /plate_center        : geometry_msgs/PointStamped   (optional)
+      - /table_center        : geometry_msgs/PointStamped   (recommended)
 
     Strategy:
       - Table collision: added ONCE when first /table_center arrives.
@@ -38,18 +40,24 @@ class GrasperPy:
         # ============================
         moveit_commander.roscpp_initialize([])
         self.group = moveit_commander.MoveGroupCommander("arm")
+        self.group_cartesian = moveit_commander.MoveGroupCommander("arm_torso")
 
         self.ref_frame = self.group.get_planning_frame()
         rospy.loginfo("[GrasperPy] Using planning frame as ref_frame: '%s'", self.ref_frame)
-        self.eef_link = rospy.get_param("~eef_link", "gripper_link")
 
+        self.eef_link = rospy.get_param("~eef_link", "gripper_link")
         self.group.set_pose_reference_frame(self.ref_frame)
         self.group.set_end_effector_link(self.eef_link)
-        self.group.set_goal_tolerance(rospy.get_param("~goal_tolerance", 0.05))
+        self.group_cartesian.set_pose_reference_frame(self.ref_frame)
+        self.group_cartesian.set_end_effector_link(self.eef_link)
+
+        self.group.set_goal_tolerance(rospy.get_param("~goal_tolerance", 0.02))
         self.velocity_scaling = rospy.get_param("~velocity_scaling", 0.3)
         self.accel_scaling = rospy.get_param("~accel_scaling", 0.2)
         self.group.set_max_velocity_scaling_factor(self.velocity_scaling)
         self.group.set_max_acceleration_scaling_factor(self.accel_scaling)
+        self.group_cartesian.set_max_velocity_scaling_factor(self.velocity_scaling)
+        self.group_cartesian.set_max_acceleration_scaling_factor(self.accel_scaling)
 
         # Planner config
         self.group.set_planner_id(rospy.get_param("~planner_id", "RRTConnectkConfigDefault"))
@@ -70,14 +78,19 @@ class GrasperPy:
         self.table_added = False
 
         # ============================
-        # Grasp Parameters
+        # Grasp / Place Parameters
         # ============================
-        # Fixed grasp orientation (RPY in ref_frame)
-        self.grasp_rpy = [
-            rospy.get_param("~grasp_roll", -np.pi / 2),
-            rospy.get_param("~grasp_pitch", 0.0),
-            rospy.get_param("~grasp_yaw", np.pi / 2),
+        # Fixed place orientation (RPY in ref_frame)
+        self.place_rpy = [
+            rospy.get_param("~place_roll", -np.pi / 2),
+            rospy.get_param("~place_pitch", 0.0),
+            rospy.get_param("~place_yaw", np.pi / 2),
         ]
+
+        # Rotation offsets applied to grasp orientation
+        R_current = tft.euler_matrix(-np.pi, -np.pi/2, 0.0)[:3, :3]
+        R_desired = tft.euler_matrix(-np.pi/2, 0.0, np.pi/2)[:3, :3]
+        self.R_offset = R_current.T @ R_desired
 
         # Position offsets applied to centroid (in ref_frame)
         self.x_offset = rospy.get_param("~x_offset", 0.0)
@@ -85,27 +98,35 @@ class GrasperPy:
         self.z_offset = rospy.get_param("~z_offset", 0.0)
 
         # Pregrasp offset relative to grasp pose (in ref_frame)
-        self.pregrasp_offset = np.array([
-            rospy.get_param("~pregrasp_offset_x", -0.25),
-            rospy.get_param("~pregrasp_offset_y", 0.0),
-            rospy.get_param("~pregrasp_offset_z", 0.0),
-        ], dtype=float)
+        # self.pregrasp_offset = np.array([
+        #     rospy.get_param("~pregrasp_offset_x", -0.25),
+        #     rospy.get_param("~pregrasp_offset_y", 0.0),
+        #     rospy.get_param("~pregrasp_offset_z", 0.0),
+        # ], dtype=float)
+        self.pregrasp_dist = rospy.get_param("~pregrasp_dist", 0.35)
 
         # Cartesian approach direction (in ref_frame), normalized internally
-        self.approach_dist = rospy.get_param("~approach_dist", 0.1)
+        self.approach_dist = rospy.get_param("~approach_dist", 0.12)
         self.lift_dist = rospy.get_param("~lift_dist", 0.05)
 
         # Place behavior
-        self.place_drop = rospy.get_param("~place_drop", 0.15)
-        self.place_x_offset = float(rospy.get_param("~place_x_offset", -0.02))
+        self.place_drop = rospy.get_param("~place_drop", 0.03)
+        self.place_x_offset = float(rospy.get_param("~place_x_offset", 0.0))
         self.place_y_offset = float(rospy.get_param("~place_y_offset", 0.0))
-        self.place_retreat_up = float(rospy.get_param("~place_retreat_up", 0.02))
+        self.place_retreat_up = float(rospy.get_param("~place_retreat_up", 0.03))
 
         # ============================
         # TF buffer (for marker -> base_link)
         # ============================
         self.tf_buffer = tf2_ros.Buffer(cache_time=rospy.Duration(10.0))
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
+
+        # ============================
+        # PCA Axis (from PCANode)
+        # ============================
+        self.axis_long = None
+        self.axis_mid = None
+        self.axis_thin = None
 
         # ============================
         # Gripper
@@ -117,11 +138,11 @@ class GrasperPy:
         # ------------------------------
         # Debug Visualization
         # ------------------------------
-        self.pub_pregrasp_pose = rospy.Publisher(
-            "/pregrasp_pose", PoseStamped, queue_size=1, latch=True
+        self.pub_pregrasp_point = rospy.Publisher(
+            "/pregrasp_point", PointStamped, queue_size=1, latch=True
         )
-        self.pub_pregrasp_marker = rospy.Publisher(
-            "/pregrasp_marker", Marker, queue_size=1, latch=True
+        self.pub_place_point = rospy.Publisher(
+            "/place_point", PointStamped, queue_size=1, latch=True
         )
 
         # ============================
@@ -134,8 +155,11 @@ class GrasperPy:
         # ============================
         # Subscribers
         # ============================
-        self.sub_centroid = rospy.Subscriber(
-            "/cluster_centroid", PointStamped, self.centroid_cb, queue_size=1
+        self.sub_target = rospy.Subscriber(
+            "/pca_object_centroid", PointStamped, self.target_cb, queue_size=1
+        )
+        self.sub_pca = rospy.Subscriber(
+            "/calculated_pca_axis", Float64MultiArray, self.pca_axis_cb, queue_size=1
         )
         self.sub_table = rospy.Subscriber(
             "/table_center", PointStamped, self.table_center_cb, queue_size=1
@@ -149,14 +173,24 @@ class GrasperPy:
     # ======================================================
     # Callbacks
     # ======================================================
+    def pca_axis_cb(self, msg: Float64MultiArray):
+        A = np.array(msg.data, dtype=float).reshape((3, 3))
+        self.axis_long = A[0]
+        self.axis_mid = A[1]
+        self.axis_thin = A[2]
+
     def plate_center_cb(self, msg: PointStamped):
         self.plate_center_msg = msg
 
     def table_center_cb(self, msg: PointStamped):
         self.table_center_msg = msg
 
-    def centroid_cb(self, msg: PointStamped):
+    def target_cb(self, msg: PointStamped):
         if self.executed:
+            return
+        
+        if self.axis_long is None or self.axis_mid is None or self.axis_thin is None:
+            rospy.logwarn("[GrasperPy] Waiting for full PCA axes...")
             return
 
         if not self.table_added:
@@ -199,15 +233,19 @@ class GrasperPy:
     def freeze_perception(self):
         # unregister safely
         try:
-            if self.sub_centroid is not None:
-                self.sub_centroid.unregister()
-                self.sub_centroid = None
+            if self.sub_target is not None:
+                self.sub_target.unregister()
+                self.sub_target = None
             if self.sub_table is not None:
                 self.sub_table.unregister()
                 self.sub_table = None
             if self.sub_plate is not None:
                 self.sub_plate.unregister()
                 self.sub_plate = None
+            if self.sub_pca is not None:
+                self.sub_pca.unregister()
+                self.sub_pca = None
+
             rospy.loginfo("[GrasperPy] Perception frozen (subscribers unregistered).")
         except Exception as e:
             rospy.logwarn("[GrasperPy] freeze_perception exception: %s", str(e))
@@ -233,7 +271,34 @@ class GrasperPy:
             return False
 
         # 2) Build grasp pose (position + offsets, fixed orientation)
-        q = tft.quaternion_from_euler(*self.grasp_rpy)
+        # grasp orientation from PCA
+        R_pca = np.vstack([
+            self.axis_long,
+            self.axis_mid,
+            self.axis_thin, 
+        ]).T
+        R = R_pca @ self.R_offset
+
+        # choose approach direction 
+        approach_dir = -R[:, 2]  # axis_thin
+        approach_dir /= np.linalg.norm(approach_dir)
+
+        T = np.eye(4)
+        T[:3, :3] = R
+        q = tft.quaternion_from_matrix(T)
+
+        # ============================
+        # Debug: print grasp RPY
+        # ============================
+        roll, pitch, yaw = tft.euler_from_quaternion(q)
+
+        rospy.loginfo(
+            "[GrasperPy][GRASP RPY] roll=%.3f rad (%.1f°), pitch=%.3f rad (%.1f°), yaw=%.3f rad (%.1f°)",
+            roll, np.degrees(roll),
+            pitch, np.degrees(pitch),
+            yaw, np.degrees(yaw),
+        )
+
         grasp_pose = PoseStamped()
         grasp_pose.header.frame_id = self.ref_frame
         grasp_pose.header.stamp = centroid_base.header.stamp
@@ -248,32 +313,50 @@ class GrasperPy:
         grasp_pose.pose.orientation.w = q[3]
 
         # 3) Build pregrasp pose (retreat from grasp pose)
-        pregrasp = PoseStamped()
-        pregrasp.header = grasp_pose.header
-        pregrasp.pose = grasp_pose.pose
-        pregrasp.pose.position.x += self.pregrasp_offset[0]
-        pregrasp.pose.position.y += self.pregrasp_offset[1]
-        pregrasp.pose.position.z += self.pregrasp_offset[2]
+        pregrasp = copy.deepcopy(grasp_pose)
+        pregrasp.pose.position.x -= approach_dir[0] * self.pregrasp_dist
+        pregrasp.pose.position.y -= approach_dir[1] * self.pregrasp_dist
+        pregrasp.pose.position.z -= approach_dir[2] * self.pregrasp_dist
 
-        # Debug: publish pregrasp pose
-        self.publish_pregrasp_visual(pregrasp)
+        ################ Debug: publish pregrasp pose ################
+        # grasp point (numpy)
+        grasp_point = np.array([
+            grasp_pose.pose.position.x,
+            grasp_pose.pose.position.y,
+            grasp_pose.pose.position.z,
+        ], dtype=float)
+
+        # pregrasp point 
+        pregrasp_point = grasp_point - approach_dir * self.pregrasp_dist
+
+        # Publish pregrasp point
+        ps_pre = PointStamped()
+        ps_pre.header.frame_id = self.ref_frame
+        ps_pre.header.stamp = rospy.Time.now()
+        ps_pre.point.x = pregrasp_point[0]
+        ps_pre.point.y = pregrasp_point[1]
+        ps_pre.point.z = pregrasp_point[2]
+
+        self.pub_pregrasp_point.publish(ps_pre)
 
         # ============================
         # Grasp
         # ============================
-        rospy.loginfo("[GrasperPy] Move to pregrasp")
+        rospy.loginfo("[GrasperPy] Move to pregrasp...")
         if not self.move_to_pose(pregrasp):
             return False
 
-        rospy.loginfo("[GrasperPy] Cartesian approach")
-        if not self.cartesian_move([1, 0, 0], self.approach_dist):
-            return False
+        rospy.loginfo("[GrasperPy] Cartesian approach...")
+        if not self.cartesian_move(approach_dir, self.approach_dist):
+            return False  
+        # if not self.cartesian_move([1, 0, 0], self.approach_dist):
+        #     return False
 
         rospy.loginfo("[GrasperPy] Close gripper ...")
         self.close_gripper()
         rospy.sleep(2.0)
 
-        rospy.loginfo("[GrasperPy] Lift up")
+        rospy.loginfo("[GrasperPy] Lift up...")
         if not self.cartesian_move([0, 0, 1], self.lift_dist):
             return False
 
@@ -282,29 +365,50 @@ class GrasperPy:
         # ============================
         # Place
         # ============================
-        place_point_ref = self.get_place_point_in_ref_frame()
-        if place_point_ref is None:
+        place_point = self.get_place_point_in_ref_frame()
+        if place_point is None:
             rospy.logerr("[GrasperPy] No place point received; cannot place.")
             return False
+        
+        ################ Debug: place point (use actual place_pose) ################
+        place_point_offset = Point()
+        place_point_offset.x = place_point.x + self.place_x_offset
+        place_point_offset.y = place_point.y + self.place_y_offset
+        place_point_offset.z = place_point.z
+
+        q_place = tft.quaternion_from_euler(*self.place_rpy)
 
         place_pose = PoseStamped()
         place_pose.header.frame_id = self.ref_frame
         place_pose.header.stamp = rospy.Time.now()
 
-        place_pose.pose.position.x = place_point_ref.x + self.place_x_offset
-        place_pose.pose.position.y = place_point_ref.y + self.place_y_offset
-        place_pose.pose.position.z = (
-            self.group.get_current_pose().pose.position.z - self.place_drop
-        )
-        place_pose.pose.orientation = grasp_pose.pose.orientation
+        place_pose.pose.position.x = place_point_offset.x
+        place_pose.pose.position.y = place_point_offset.y
+        place_pose.pose.position.z = self.group.get_current_pose().pose.position.z
+
+        place_pose.pose.orientation.x = q_place[0]
+        place_pose.pose.orientation.y = q_place[1]
+        place_pose.pose.orientation.z = q_place[2]
+        place_pose.pose.orientation.w = q_place[3]
+
+        ps_place = PointStamped()
+        ps_place.header.frame_id = self.ref_frame
+        ps_place.header.stamp = rospy.Time.now()
+        ps_place.point = place_pose.pose.position
+
+        self.pub_place_point.publish(ps_place)
 
         rospy.loginfo("[GrasperPy] Move to place ...")
         if not self.move_to_pose(place_pose):
             return False
+        
+        rospy.loginfo("[GrasperPy] Drop down ...")
+        if not self.cartesian_move([0, 0, -1], self.place_drop):
+            return False
 
         rospy.loginfo("[GrasperPy] Open gripper ...")
         self.open_gripper()
-        rospy.sleep(2.0)
+        rospy.sleep(4.0)
 
         rospy.loginfo("[GrasperPy] Retreat up ...")
         self.cartesian_move([0, 0, 1], self.place_retreat_up)
@@ -391,28 +495,6 @@ class GrasperPy:
         )
 
     # ======================================================
-    # Visualization helpers
-    # ======================================================
-    def publish_pregrasp_visual(self, pregrasp: PoseStamped):
-        self.pub_pregrasp_pose.publish(pregrasp)
-
-        mk = Marker()
-        mk.header = pregrasp.header
-        mk.ns = "pregrasp"
-        mk.id = 0
-        mk.type = Marker.ARROW
-        mk.action = Marker.ADD
-        mk.pose = pregrasp.pose
-        mk.scale.x = 0.15
-        mk.scale.y = 0.02
-        mk.scale.z = 0.02
-        mk.color.r = 0.0
-        mk.color.g = 1.0
-        mk.color.b = 0.0
-        mk.color.a = 1.0
-        self.pub_pregrasp_marker.publish(mk)
-
-    # ======================================================
     # TF transformer
     # ======================================================
     def transform_pose(self, pose_st: PoseStamped, target_frame: str):
@@ -460,7 +542,11 @@ class GrasperPy:
             return False
         direction /= n
 
-        start_pose = copy.deepcopy(self.group.get_current_pose().pose)
+        self.group_cartesian.stop()
+        self.group_cartesian.clear_pose_targets()
+        self.group_cartesian.set_start_state_to_current_state()
+
+        start_pose = copy.deepcopy(self.group_cartesian.get_current_pose().pose)
 
         target_pose = PoseStamped()
         target_pose.header.frame_id = self.ref_frame
@@ -472,9 +558,10 @@ class GrasperPy:
         waypoints = [start_pose, target_pose.pose]
 
         try:
-            eef_step = float(rospy.get_param("~cartesian_eef_step", 0.01))
+            eef_step = float(rospy.get_param("~cartesian_eef_step", 0.005))
             jump_threshold = float(rospy.get_param("~cartesian_jump_threshold", 0.0))
             plan, fraction = self._compute_cartesian_path(
+                self.group_cartesian,
                 waypoints,
                 eef_step,
                 jump_threshold,
@@ -484,27 +571,45 @@ class GrasperPy:
             rospy.logerr("[GrasperPy] compute_cartesian_path exception: %s", str(e))
             return False
 
-        if fraction < 0.99:
+        if fraction < 0.95:
             rospy.logerr("[GrasperPy] Cartesian path failed (%.2f)", fraction)
             return False
 
-        success = self.group.execute(plan, wait=True)
-        self.group.stop()
+        try:
+            current_state = self.group_cartesian.get_current_state()
+            plan = self.group_cartesian.retime_trajectory(
+                current_state,
+                plan,
+                self.velocity_scaling,
+                self.accel_scaling,
+            )
+        except Exception as e:
+            rospy.logwarn("[GrasperPy] retime_trajectory failed: %s", str(e))
+
+        min_dt = float(rospy.get_param("~cartesian_min_time_step", 0.01))
+        if self._ensure_monotonic_time(plan, min_dt=min_dt):
+            rospy.logwarn(
+                "[GrasperPy] Cartesian trajectory time fixed (min_dt=%.3f).",
+                min_dt,
+            )
+
+        success = self.group_cartesian.execute(plan, wait=True)
+        self.group_cartesian.stop()
 
         if not success:
             rospy.logerr("[GrasperPy] Cartesian execute failed")
         return success
 
-    def _compute_cartesian_path(self, waypoints, eef_step, jump_threshold, avoid_collisions):
+    def _compute_cartesian_path(self, group, waypoints, eef_step, jump_threshold, avoid_collisions):
         try:
-            return self.group.compute_cartesian_path(
+            return group.compute_cartesian_path(
                 waypoints,
                 eef_step,
                 avoid_collisions=avoid_collisions,
             )
         except Exception:
             try:
-                return self.group.compute_cartesian_path(
+                return group.compute_cartesian_path(
                     waypoints,
                     eef_step,
                     jump_threshold,
@@ -512,7 +617,7 @@ class GrasperPy:
                 )
             except Exception:
                 poses = [conversions.pose_to_list(p) for p in waypoints]
-                ser_path, fraction = self.group._g.compute_cartesian_path(
+                ser_path, fraction = group._g.compute_cartesian_path(
                     poses,
                     eef_step,
                     jump_threshold,
@@ -521,6 +626,30 @@ class GrasperPy:
                 path = RobotTrajectory()
                 path.deserialize(ser_path)
                 return (path, fraction)
+
+    def _ensure_monotonic_time(self, traj, min_dt=0.01) -> bool:
+        if traj is None or not hasattr(traj, "joint_trajectory"):
+            return False
+        points = traj.joint_trajectory.points
+        if len(points) < 2:
+            return False
+
+        changed = False
+        last = points[0].time_from_start.to_sec()
+        if last <= 0.0:
+            last = min_dt
+            points[0].time_from_start = rospy.Duration(last)
+            changed = True
+
+        for i in range(1, len(points)):
+            t = points[i].time_from_start.to_sec()
+            if t <= last:
+                last = last + min_dt
+                points[i].time_from_start = rospy.Duration(last)
+                changed = True
+            else:
+                last = t
+        return changed
     
     # ======================================================
     # Gripper

@@ -35,7 +35,7 @@ def compute_pca(pts: np.ndarray):
     axis_mid  = eigvecs[:, 1]
     axis_long = eigvecs[:, 2]
 
-    return centroid,eigvals, axis_thin, axis_mid, axis_long
+    return centroid, eigvals, axis_thin, axis_mid, axis_long
 
 # ============================================================
 # PCA Node
@@ -59,6 +59,8 @@ class PCANodePy:
 
         self.pub_marker = rospy.Publisher("/pca_axes", MarkerArray, queue_size=1)
         self.pub_axis = rospy.Publisher("/calculated_pca_axis", Float64MultiArray, queue_size=1)
+
+        self.pub_pac_centroid = rospy.Publisher("/pca_object_centroid", PointStamped, queue_size=1)
 
         rospy.loginfo("[PCANodePy] Started. target_label=%d", self.target_label)
 
@@ -158,6 +160,13 @@ class PCANodePy:
             centroid,
             axis_long, axis_mid, axis_thin
         )
+
+        # 7) Publish centroid as PointStamped
+        ps = PointStamped()
+        ps.header.frame_id = msg.header.frame_id
+        ps.header.stamp = rospy.Time.now()
+        ps.point.x, ps.point.y, ps.point.z = centroid
+        self.pub_pac_centroid.publish(ps)
         
     # ========================================================
     # Visualization
