@@ -1,10 +1,14 @@
 <launch>
   <node pkg="grasp" type="pca_node.py" name="pca_node" output="screen">
 
-    <param name="target_label" value="4"/>
+    <param name="target_label" value="1"/>
     <param name="axis_scale" value="0.25"/>
 
     <param name="vertical_cos_threshold" value="0.8"/>
     <param name="horizontal_cos_threshold" value="0.4"/>
   </node>
+
+  <!-- Start the grasping node -->
+  <node name="grasp_pca" pkg="grasp" type="grasp_pca.py"  output="screen"/>
+
 </launch>

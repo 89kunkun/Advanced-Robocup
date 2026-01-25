@@ -70,8 +70,8 @@ class GrasperPy:
         self.scene = PlanningSceneInterface(synchronous=True)
 
         # Table collision params
-        self.table_size_x = float(rospy.get_param("~table_size_x", 0.4))
-        self.table_size_y = float(rospy.get_param("~table_size_y", 1.2))
+        self.table_size_x = float(rospy.get_param("~table_size_x", 0.5))
+        self.table_size_y = float(rospy.get_param("~table_size_y", 1.3))
         self.table_thickness = float(rospy.get_param("~table_thickness", 0.4))
         self.table_z_offset = float(rospy.get_param("~table_z_offset", 0.02))
         self.table_object_id = rospy.get_param("~table_object_id", "table")
@@ -86,6 +86,7 @@ class GrasperPy:
             rospy.get_param("~place_pitch", 0.0),
             rospy.get_param("~place_yaw", np.pi / 2),
         ]
+        self.place_source = None
 
         # Rotation offsets applied to grasp orientation
         R_current = tft.euler_matrix(-np.pi, -np.pi/2, 0.0)[:3, :3]
@@ -106,14 +107,15 @@ class GrasperPy:
         self.pregrasp_dist = rospy.get_param("~pregrasp_dist", 0.35)
 
         # Cartesian approach direction (in ref_frame), normalized internally
-        self.approach_dist = rospy.get_param("~approach_dist", 0.12)
-        self.lift_dist = rospy.get_param("~lift_dist", 0.05)
+        self.approach_dist = rospy.get_param("~approach_dist", 0.15)
+        self.lift_dist = rospy.get_param("~lift_dist", 0.1)
 
         # Place behavior
-        self.place_drop = rospy.get_param("~place_drop", 0.03)
-        self.place_x_offset = float(rospy.get_param("~place_x_offset", 0.0))
+        self.place_drop = rospy.get_param("~place_drop", 0.1)
+        self.place_x_offset = float(rospy.get_param("~place_x_offset", -0.1))
         self.place_y_offset = float(rospy.get_param("~place_y_offset", 0.0))
-        self.place_retreat_up = float(rospy.get_param("~place_retreat_up", 0.03))
+        self.place_z_offset = float(rospy.get_param("~place_z_offset", 0.1))
+        self.place_retreat_up = float(rospy.get_param("~place_retreat_up", 0.1))
 
         # ============================
         # TF buffer (for marker -> base_link)
@@ -212,7 +214,27 @@ class GrasperPy:
             if not self.table_added:
                 rospy.logerr("[GrasperPy] Failed to add table collision; abort grasp.")
                 return
-
+            
+        if self.plate_center_msg is None:
+            plate_timeout = float(rospy.get_param("~plate_wait_timeout", 2.0))
+            rospy.loginfo(
+                "[GrasperPy] Waiting for /plate_center (timeout=%.1fs)...",
+                plate_timeout
+            )
+            try:
+                self.plate_center_msg = rospy.wait_for_message(
+                    "/plate_center",
+                    PointStamped,
+                    timeout=plate_timeout
+                )
+                self.place_source = "plate"
+                rospy.loginfo("[GrasperPy] /plate_center received.")
+            except rospy.ROSException:
+                rospy.logwarn(
+                    "[GrasperPy] No /plate_center received, will fallback to table_center."
+                )
+                self.place_source = "table"
+ 
         self.executed = True
         rospy.loginfo(
             "[GrasperPy] Got centroid in frame '%s' at (%.3f %.3f %.3f)",
@@ -220,6 +242,10 @@ class GrasperPy:
         )
 
         # Freeze perception immediately
+        rospy.loginfo(
+            "[GrasperPy] Perception ready: PCA ok | table ok | plate=%s",
+            "ok" if self.plate_center_msg is not None else "fallback"
+        )
         self.freeze_perception()
 
         # Execute grasp once
@@ -374,7 +400,7 @@ class GrasperPy:
         place_point_offset = Point()
         place_point_offset.x = place_point.x + self.place_x_offset
         place_point_offset.y = place_point.y + self.place_y_offset
-        place_point_offset.z = place_point.z
+        place_point_offset.z = place_point.z + self.place_z_offset
 
         q_place = tft.quaternion_from_euler(*self.place_rpy)
 
@@ -385,6 +411,7 @@ class GrasperPy:
         place_pose.pose.position.x = place_point_offset.x
         place_pose.pose.position.y = place_point_offset.y
         place_pose.pose.position.z = self.group.get_current_pose().pose.position.z
+        # place_pose.pose.position.z = place_point_offset.z
 
         place_pose.pose.orientation.x = q_place[0]
         place_pose.pose.orientation.y = q_place[1]
@@ -442,7 +469,6 @@ class GrasperPy:
         if p_out is None:
             return None
         return p_out.pose.position
-    
     
     # ======================================================
     # Planning Scene

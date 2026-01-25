@@ -46,6 +46,8 @@ class PCANodePy:
     def __init__(self):
         rospy.init_node("pca_node")
 
+        self.prev_state = None 
+
         # Parameters
         self.target_label = rospy.get_param("~target_label", 1)
         self.vertical_cos_threshold = rospy.get_param("~vertical_cos_threshold", 0.8)
@@ -108,13 +110,15 @@ class PCANodePy:
         else:
             state = "TILTED"
 
-        rospy.loginfo(
-            "[PCA] label=%d | cos(long,Z)=%.3f | cos(thin,Z)=%.3f → %s",
-            self.target_label,
-            cos_long_z,
-            cos_thin_z,
-            state
-        )
+        if state != self.prev_state:
+            rospy.loginfo(
+                "[PCA] label=%d | cos(long,Z)=%.3f | cos(thin,Z)=%.3f → %s",
+                self.target_label,
+                cos_long_z,
+                cos_thin_z,
+                state
+            )
+            self.prev_state = state
 
         # 4) Axis regularization based on state
         if state == "HORIZONTAL":
@@ -126,7 +130,7 @@ class PCANodePy:
             axis_long = normalize(axis_long)
             axis_mid = normalize(np.cross(axis_thin, axis_long))
 
-            # ===== 【新增】确保 axis_long 朝“物体外侧” =====
+            # ===== make sure axis_long is von in to out =====
             ref_dir = centroid.copy()
             ref_dir[2] = 0.0
             ref_dir = normalize(ref_dir)

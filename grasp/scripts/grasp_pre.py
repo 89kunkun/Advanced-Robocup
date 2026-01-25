@@ -172,8 +172,8 @@ if __name__ == "__main__":
     commander.move_head()
     rospy.sleep(0.8)
 
-    commander.move_arm()
-    rospy.sleep(3.0)
+    # commander.move_arm()
+    # rospy.sleep(3.0)
 
     commander.print_end_effector_rpy()
 
