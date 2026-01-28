@@ -1,0 +1,110 @@
+<launch>
+
+  <!-- =========================
+       输入：盘子中心点话题
+       ========================= -->
+  <arg name="plate_center_topic" default="/plate_center"/>
+
+  <!-- =========================
+       节点基础设置
+       ========================= -->
+  <arg name="node_name" default="grasp_plate"/>
+  <arg name="eef_link" default="gripper_link"/>
+
+  <!-- =========================
+       MoveIt 规划参数
+       ========================= -->
+  <arg name="planner_id" default="RRTConnectkConfigDefault"/>
+  <arg name="planning_time" default="15.0"/>
+  <arg name="num_planning_attempts" default="5"/>
+  <arg name="goal_tolerance" default="0.05"/>
+  <arg name="velocity_scaling" default="0.3"/>
+  <arg name="accel_scaling" default="0.2"/>
+
+  <!-- =========================
+       抓取时夹爪姿态（欧拉角 RPY）
+       ========================= -->
+  <arg name="grasp_roll"  default="-1.57079632679"/>
+  <arg name="grasp_pitch" default="-1.57079632679"/>
+  <arg name="grasp_yaw"   default="1.57079632679"/>
+
+  <!-- =========================
+       抓取位置微调
+       ========================= -->
+  <arg name="x_offset" default="-0.13"/>
+  <arg name="y_offset" default="0.0"/>
+  <arg name="z_offset" default="0.0"/>
+
+  <!-- =========================
+       预抓取位置偏移
+       ========================= -->
+  <arg name="pregrasp_offset_x" default="-0.1"/>
+  <arg name="pregrasp_offset_y" default="0.0"/>
+  <arg name="pregrasp_offset_z" default="0.0"/>
+
+  <!-- =========================
+       笛卡尔直线运动距离
+       ========================= -->
+  <!-- 建议：approach_dist 通常要接近 abs(pregrasp_offset_x) 才能靠近到抓取点 -->
+  <arg name="approach_dist" default="0.25"/>
+  <arg name="lift_dist" default="0.1"/>
+
+  <!-- =========================
+       抓取行为设置
+       ========================= -->
+  <arg name="open_before_grasp" default="true"/>
+
+  <!-- =========================
+       笛卡尔路径规划精度
+       ========================= -->
+  <arg name="cartesian_eef_step" default="0.01"/>
+  <arg name="cartesian_jump_threshold" default="0.0"/>
+
+  <!-- TF 超时（更稳） -->
+  <arg name="tf_timeout" default="1.0"/>
+
+  <!-- =========================
+       节点本体
+       ========================= -->
+  <node pkg="grasp"
+        type="grasp_plate.py"
+        name="$(arg node_name)"
+        output="screen">
+
+    <!-- 话题重映射：相对名 plate_center -->
+    <remap from="plate_center" to="$(arg plate_center_topic)"/>
+
+    <!-- 参数（私有参数 ~xxx） -->
+    <param name="eef_link" value="$(arg eef_link)"/>
+
+    <param name="planner_id" value="$(arg planner_id)"/>
+    <param name="planning_time" value="$(arg planning_time)"/>
+    <param name="num_planning_attempts" value="$(arg num_planning_attempts)"/>
+    <param name="goal_tolerance" value="$(arg goal_tolerance)"/>
+    <param name="velocity_scaling" value="$(arg velocity_scaling)"/>
+    <param name="accel_scaling" value="$(arg accel_scaling)"/>
+
+    <param name="grasp_roll" value="$(arg grasp_roll)"/>
+    <param name="grasp_pitch" value="$(arg grasp_pitch)"/>
+    <param name="grasp_yaw" value="$(arg grasp_yaw)"/>
+
+    <param name="x_offset" value="$(arg x_offset)"/>
+    <param name="y_offset" value="$(arg y_offset)"/>
+    <param name="z_offset" value="$(arg z_offset)"/>
+
+    <param name="pregrasp_offset_x" value="$(arg pregrasp_offset_x)"/>
+    <param name="pregrasp_offset_y" value="$(arg pregrasp_offset_y)"/>
+    <param name="pregrasp_offset_z" value="$(arg pregrasp_offset_z)"/>
+
+    <param name="approach_dist" value="$(arg approach_dist)"/>
+    <param name="lift_dist" value="$(arg lift_dist)"/>
+    <param name="open_before_grasp" value="$(arg open_before_grasp)"/>
+
+    <param name="cartesian_eef_step" value="$(arg cartesian_eef_step)"/>
+    <param name="cartesian_jump_threshold" value="$(arg cartesian_jump_threshold)"/>
+
+    <param name="tf_timeout" value="$(arg tf_timeout)"/>
+
+  </node>
+</launch>
+
