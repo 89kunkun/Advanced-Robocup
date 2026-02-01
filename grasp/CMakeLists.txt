@@ -182,6 +182,9 @@ catkin_install_python(PROGRAMS
   scripts/pca_node.py
   scripts/grasp_pre.py
   scripts/grasp_pca.py
+  scripts/grasp_plate.py
+  scripts/flower_manager.py
+  scripts/flower_manager_plate.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

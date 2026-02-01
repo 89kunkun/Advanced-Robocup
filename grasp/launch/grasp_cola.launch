@@ -1,6 +1,11 @@
 <launch>
-  <node pkg="grasp" type="pca_node.py" name="pca_node" output="screen">
 
+  <!-- pre-grasp -->
+  <rosparam file="$(find grasp)/launch/config/grasp_try.yaml" command="load" />
+  <node name="grasp_pre" pkg="grasp" type="grasp_pre.py" output="screen" />
+
+  <!-- PCA node -->
+  <node pkg="grasp" type="pca_node.py" name="pca_node" output="screen">
     <param name="target_label" value="1"/>
     <param name="axis_scale" value="0.25"/>
 
@@ -9,6 +14,15 @@
   </node>
 
   <!-- Start the grasping node -->
-  <node name="grasp_pca" pkg="grasp" type="grasp_pca.py"  output="screen"/>
+  <node name="grasp_pca" pkg="grasp" type="grasp_pca.py"  output="screen">
+    <param name="place_drop" value="0.18"/>
+    <param name="approach_dist" value="0.13"/>
+    <param name="place_offset_y" value="0.1"/>
+  </node>
 
+  <!-- Flow manager -->
+  <node pkg="grasp" name="flower_manager" type="flower_manager.py" output="screen" required="true">
+    <param name="flow_success_msg" value="COLA"/>
+    <param name="flow_failed_msg" value="COLA"/>
+  </node>
 </launch>

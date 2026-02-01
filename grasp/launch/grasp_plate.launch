@@ -1,0 +1,16 @@
+<launch>
+
+    <!-- pre-grasp -->
+    <rosparam file="$(find grasp)/launch/config/grasp_try_plate.yaml" command="load" />
+    <node name="grasp_pre" pkg="grasp" type="grasp_pre.py" output="screen" />
+
+    <!-- Launch the grasp_plate_new node -->
+    <node pkg="grasp" type="grasp_plate.py" name="grasp_plate" output="screen">
+    </node>
+
+    <!-- Flow manager -->
+    <node pkg="grasp" name="flower_manager_plate" type="flower_manager_plate.py" output="screen" required="true">
+        <param name="flow_success_msg" value="PLATE"/>
+        <param name="flow_failed_msg" value="PLATE"/>
+    </node>
+</launch>

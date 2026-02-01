@@ -57,6 +57,13 @@ add_message_files(
   ObjectCount.msg
 )
 
+add_message_files(
+  FILES
+  Keypoint.msg
+  Skeleton.msg
+  Skeletons.msg
+)
+
 ## Generate services in the 'srv' folder
 # add_service_files(
 #   FILES

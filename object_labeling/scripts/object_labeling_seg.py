@@ -276,16 +276,19 @@ class ObjectLabelingPy:
         """
         if self.objects_pts is None or self.camera_info is None:
             return
+        # Snapshot to avoid concurrent updates from callbacks
+        objects_pts = self.objects_pts.copy()
+        objects_header = self.objects_header
 
         # --- DBSCAN clustering in 3D ---
         pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(self.objects_pts)
+        pcd.points = o3d.utility.Vector3dVector(objects_pts)
         cluster_ids = np.array(
             pcd.cluster_dbscan(eps=float(self.dbscan_eps), min_points=int(self.dbscan_min_points),
                                print_progress=False)
         )
 
-        labels_out = np.zeros(len(self.objects_pts), dtype=np.uint32)
+        labels_out = np.zeros(len(objects_pts), dtype=np.uint32)
         markers = MarkerArray()
 
         # Camera intrinsics
@@ -299,7 +302,7 @@ class ObjectLabelingPy:
                 continue
             
             idxs = np.where(cluster_ids == cid)[0]
-            pts = self.objects_pts[idxs]
+            pts = objects_pts[idxs]
             centroid = pts.mean(axis=0)
             label_name = "unknown"
 
@@ -307,7 +310,7 @@ class ObjectLabelingPy:
             if self.yolo_masks:
                 try:
                     pt = PointStamped()
-                    pt.header.frame_id = self.objects_header.frame_id   # base_footprint
+                    pt.header.frame_id = objects_header.frame_id   # base_footprint
                     pt.header.stamp = rospy.Time(0)
                     pt.point.x, pt.point.y, pt.point.z = centroid
 
@@ -330,7 +333,7 @@ class ObjectLabelingPy:
 
             # --- Publish text marker ---
             mk = Marker()
-            mk.header = self.objects_header
+            mk.header = objects_header
             mk.ns = "objects"
             mk.id = int(cid)
             mk.type = Marker.TEXT_VIEW_FACING
@@ -345,8 +348,8 @@ class ObjectLabelingPy:
             # --- Publish centroid ---
             # cps = PointStamped(header=self.objects_header).
             cps = PointStamped()
-            cps.header.frame_id = self.objects_header.frame_id
-            cps.header.stamp = self.objects_header.stamp
+            cps.header.frame_id = objects_header.frame_id
+            cps.header.stamp = objects_header.stamp
             cps.point.x, cps.point.y, cps.point.z = centroid
             self.pub_centroid.publish(cps)
 
@@ -354,9 +357,9 @@ class ObjectLabelingPy:
         self.pub_text.publish(markers)
         # publish XYZL labeled cloud
         self.pub_labeled.publish(
-            xyzl_to_pc2(self.objects_pts, labels_out,
-                        self.objects_header.frame_id,
-                        self.objects_header.stamp)
+            xyzl_to_pc2(objects_pts, labels_out,
+                        objects_header.frame_id,
+                        objects_header.stamp)
         )
 
     # ========================================================

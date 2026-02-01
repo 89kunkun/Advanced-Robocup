@@ -3,8 +3,8 @@
 
     <param name="target_label" value="4"/>
     <param name="axis_scale" value="0.25"/>
-
+<!-- 
     <param name="vertical_cos_threshold" value="0.8"/>
-    <param name="horizontal_cos_threshold" value="0.4"/>
+    <param name="horizontal_cos_threshold" value="0.4"/> -->
   </node>
 </launch>

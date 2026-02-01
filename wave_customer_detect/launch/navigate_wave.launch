@@ -1,0 +1,13 @@
+<launch>
+  <node name="wave_customer_detect" pkg="wave_customer_detect" type="detect_wave.py" output="screen">
+    <param name="skeleton_topic" value="/yolo_v8_detector/skeletons" />
+    <param name="waving_threshold" value="40" />
+    <param name="confidence_threshold" value="0.5" />
+    <param name="debug" value="true" />
+    <param name="cooldown_time" value="2.0" />  <!-- Seconds between detections -->
+    
+    <!-- Image parameters -->
+    <param name="image_width" value="640" />
+    <param name="image_height" value="480" />
+  </node>
+</launch>
