@@ -23,8 +23,10 @@ Calculate PCA Axis and Run Grasp
 ```bash
     roslaunch grasp grasp_cola.launch/grasp_sprite.launch
 ```
+The video of demo is on Youtube and can be visited via the link https://studio.youtube.com/video/4dQ4f4bH9A4/edit
 
-map is saved on the computer of TiaGo.
+
+The scanned map of the lab is saved on the computer of TiaGo.
 ssh to TiaGo computer with `ssh pal@192.168.1.200` with password "pal".
 and switch to the map with `rosservice call /pal_map_manager/change_map "input: '2025-12-26_115430'"`
 
