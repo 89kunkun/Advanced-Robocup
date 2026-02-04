@@ -4,6 +4,12 @@ Most interactions are done using ROS topics like /startyolo, /recognized_name, /
 Modules like YoloV5 for object detection and face recognition are computationally intensive (causing delays), 
 so these modules are only started when needed.
 
+DEPENDENCIES:
+- Required ROS packages: smach, actionlib, move_base, play_motion, speech recognition
+- External nodes: yolo_v8_detector, wave_customer_detect, tiago_wave_customer_localizer
+- Hardware: TiaGo robot with gripper, head joints, and mobile base
+- Configuration: waypoints.yaml file with predefined navigation points
+
 Author: Wenrong Xue
 """
 import sys
@@ -31,7 +37,9 @@ from play_motion_msgs.msg import PlayMotionAction, PlayMotionGoal
 from sensor_msgs.msg import JointState
 
 
-# State for robot localization using AMCL and global localization service with own defined spin speed and threshold values.
+# This state handles the initial localization of the robot. It uses AMCL and the global localization service 
+# to determine the robot's pose in the map. The robot spins in place to gather information 
+# from its laser scanner and localize itself with a certain confidence level.
 class LocalizationState(smach.State):
     def __init__(self, max_duration=60.0, spin_speed=0.7, threshold=0.2):
         smach.State.__init__(self, outcomes=['localized', 'failed'])
@@ -101,7 +109,9 @@ class LocalizationState(smach.State):
         self.vel_pub.publish(stop_msg)
         rospy.loginfo("[Localization] Robot rotation stopped.")
 
-# State for all navigation task. Navigating to a pre-defined waypoint using move_base action. The waypoints are saved in waypoints.yaml
+# This state navigates the robot to a predefined waypoint from the `waypoints.yaml` file.
+# It uses the `move_base` action server to send a navigation goal.
+# The state succeeds if the robot reaches the waypoint and fails otherwise.
 class NavigateToWaypoint(smach.State):
     def __init__(self, waypoint_param):
         smach.State.__init__(self, outcomes=['succeeded', 'failed'])
@@ -121,7 +131,7 @@ class NavigateToWaypoint(smach.State):
             rospy.logwarn(f"[Navigate] Invalid coordinates for waypoint '{self.waypoint_param}': {goal_coords}")
             return 'failed'
 
-        # The coordinates are stored in the waypoints.yaml file as (x, y, theta)
+        # The coordinates are stored in the waypoints.yaml file as a list [x, y, theta]
         x, y, theta = goal_coords
         goal = MoveBaseGoal()
         goal.target_pose.header.frame_id = "map"
@@ -143,6 +153,9 @@ class NavigateToWaypoint(smach.State):
             rospy.logwarn(f"[Navigate] Failed to reach '{self.waypoint_param}'.")
             return 'failed'
         
+# This state navigates the robot to a dynamic coordinate received from a ROS topic.
+# It waits for a `Point` message on the specified topic and then sends a goal to `move_base`.
+# After reaching the goal, it saves the robot's final pose for later use.        
 class NavigateToCoordinates(smach.State):
     def __init__(self,
                  coords_topic='coordinates',
@@ -156,8 +169,8 @@ class NavigateToCoordinates(smach.State):
         self.wait_coordinates_timeout = wait_coordinates_timeout
 
         self.client = actionlib.SimpleActionClient('move_base', MoveBaseAction)
-        self.last_goal_point = None  # 保存最近一次接收到的目标点
-        self.last_goal_pose = None   # 保存最近一次导航成功时的机器人位姿（PoseStamped）
+        self.last_goal_point = None  # Store the last received goal point
+        self.last_goal_pose = None   # Store the robot's pose (PoseStamped) after the last successful navigation
 
     def execute(self, userdata):
         rospy.loginfo("[NavigateToCoordinates] Waiting for move_base action server...")
@@ -166,13 +179,13 @@ class NavigateToCoordinates(smach.State):
             return 'failed'
         rospy.loginfo("[NavigateToCoordinates] Connected to move_base.")
 
-        # 1) 等一条 /coordinates 消息
+        # 1) Wait for a /coordinates message
         try:
             rospy.loginfo("[NavigateToCoordinates] Waiting for coordinates on topic '%s' (timeout=%.1fs)...",
                           self.coords_topic, self.wait_coordinates_timeout)
             point = rospy.wait_for_message(self.coords_topic, Point,
                                            timeout=self.wait_coordinates_timeout)
-            self.last_goal_point = point  # 保存到实例变量
+            self.last_goal_point = point  # Save to instance variable
         except rospy.ROSException:
             rospy.logwarn("[NavigateToCoordinates] Timeout: no coordinates received on '%s'.",
                           self.coords_topic)
@@ -183,7 +196,7 @@ class NavigateToCoordinates(smach.State):
         rospy.loginfo("[NavigateToCoordinates] Got goal coordinates: x=%.2f, y=%.2f",
                       x, y)
 
-        # 2) 构造 MoveBaseGoal（frame_id = map）
+        # 2) Construct MoveBaseGoal (frame_id = map)
         goal = MoveBaseGoal()
         goal.target_pose.header.frame_id = self.frame_id
         goal.target_pose.header.stamp = rospy.Time.now()
@@ -191,14 +204,14 @@ class NavigateToCoordinates(smach.State):
         goal.target_pose.pose.position.y = y
         goal.target_pose.pose.position.z = 0.0
 
-        # 先用 yaw=0（面向 map 的 +x 方向），后面你可以改成朝向人
+        # First use yaw=0 (facing the +x direction of the map), you can change it to face the person later
         goal.target_pose.pose.orientation.z = 0.0
         goal.target_pose.pose.orientation.w = 1.0
 
         rospy.loginfo("[NavigateToCoordinates] Sending MoveBase goal...")
         self.client.send_goal(goal)
 
-        # 3) 等待 move_base 结果
+        # 3) Wait for move_base result
         finished = self.client.wait_for_result(rospy.Duration(self.timeout))
         if not finished:
             rospy.logwarn("[NavigateToCoordinates] Navigation timed out after %.1f s, canceling goal.",
@@ -210,13 +223,13 @@ class NavigateToCoordinates(smach.State):
         rospy.loginfo("[NavigateToCoordinates] move_base state = %d", state)
         if state == actionlib.GoalStatus.SUCCEEDED:
             rospy.loginfo("[NavigateToCoordinates] Reached goal from /coordinates.")
-            # 读取当前机器人在map下的位姿
+            # Read the current robot pose in the map frame
             try:
                 from geometry_msgs.msg import PoseStamped
                 import tf2_ros
                 tf_buffer = tf2_ros.Buffer()
                 tf_listener = tf2_ros.TransformListener(tf_buffer)
-                # 等待tf可用
+                # Wait for tf to be available
                 tf_buffer.can_transform(self.frame_id, 'base_link', rospy.Time(0), rospy.Duration(1.0))
                 trans = tf_buffer.lookup_transform(self.frame_id, 'base_link', rospy.Time(0), rospy.Duration(1.0))
                 pose = PoseStamped()
@@ -236,6 +249,10 @@ class NavigateToCoordinates(smach.State):
             rospy.logwarn("[NavigateToCoordinates] move_base failed with state %d.", state)
             return 'failed'
 
+
+# This state navigates the robot back to a previously saved pose.
+# It retrieves the pose from the `NavigateToCoordinates` state and uses `move_base` to return to that location.
+# This is useful for returning to a person's location after leaving to fetch an item.
 class NavToSavedPose(smach.State):
     def __init__(self, nav_to_coords_state):
         smach.State.__init__(self, outcomes=['succeeded', 'failed'])
@@ -263,24 +280,28 @@ class NavToSavedPose(smach.State):
         else:
             return 'failed'
 
-# 搜索顾客状态：通过topic启动检测节点
+# This state is responsible for initiating the customer search process.
+# It activates the necessary detection nodes, such as YOLO for object detection and a custom customer detector,
+# by publishing boolean messages to specific ROS topics.
 class SearchCustomersState(smach.State):
     def __init__(self):
         smach.State.__init__(self, outcomes=['succeeded', 'failed'])
-        # 初始化publisher
+        # Initialize publishers
         self.yolo_pub = rospy.Publisher('/startyolo', Bool, queue_size=1)
         self.customer_detect_pub = rospy.Publisher('/startcustomerdetection', Bool, queue_size=1)
-        # 你可以根据需要添加更多topic
+        # You can add more topics if needed
 
     def execute(self, userdata):
-        rospy.loginfo('[SearchCustomersState] 启动yolo和customerdetection相关节点...')
-        # 发布True信号
+        rospy.loginfo('[SearchCustomersState] Starting yolo and customerdetection nodes...')
+        # Publish True signal
         self.yolo_pub.publish(Bool(data=True))
         self.customer_detect_pub.publish(Bool(data=True))
-        rospy.loginfo('[SearchCustomersState] 已向/startyolo和/startcustomerdetection发布True')
+        rospy.loginfo('[SearchCustomersState] Published True to /startyolo and /startcustomerdetection')
         rospy.sleep(1.0)
         return 'succeeded'
-
+# This state manages the process of taking a customer's order using voice recognition.
+# It triggers the voice recognition system and waits for the recognized order IDs.
+# The state ensures that valid order IDs are received before transitioning.
 class TakeOrderState(smach.State):
     def __init__(self,
                  trigger_topic="/start_voice_recognition",
@@ -289,7 +310,7 @@ class TakeOrderState(smach.State):
                  trigger_sleep=0.2,
                  wait_result_timeout=15.0,
                  wait_end_timeout=10.0,
-                 # ✅ 新增：等待连接，避免第一次丢
+                 # New: wait for connection to avoid losing the first message
                  wait_subscriber_timeout=3.0):
         smach.State.__init__(self, outcomes=['succeeded', 'failed'], output_keys=['order_ids'])
 
@@ -316,8 +337,8 @@ class TakeOrderState(smach.State):
 
     def _wait_trigger_connection(self):
         """
-        等待 publisher 和 subscriber 建链完成。
-        这样只发一次 True，也能最大概率不丢。
+        Wait for the publisher and subscriber to establish a connection.
+        This way, publishing True only once has the highest probability of not being missed.
         """
         t0 = rospy.Time.now()
         rate = rospy.Rate(50)  # 20ms
@@ -338,17 +359,17 @@ class TakeOrderState(smach.State):
         self._last_ids = None
         self._done = False
 
-        # ✅ 1) 等连接，避免第一次 publish 丢失
+        # 1) Wait for connection to avoid losing the first publish
         self._wait_trigger_connection()
 
-        # ✅ 2) 只发一次 True（不会触发 3 次录音）
+        # 2) Publish True only once (won't trigger 3 recordings)
         self.trigger_pub.publish(Bool(True))
         rospy.loginfo("[TakeOrderState] Published trigger True once.")
         rospy.sleep(self.trigger_sleep)
 
         rate = rospy.Rate(10)
 
-        # ✅ 3) 必须先等到 recognized_order
+        # 3) Must wait for recognized_order first
         start = rospy.Time.now()
         while not rospy.is_shutdown():
             if self._last_ids is not None:
@@ -363,12 +384,12 @@ class TakeOrderState(smach.State):
         ids = self._last_ids or []
         rospy.loginfo("[TakeOrderState] recognized ids: %s", ids)
 
-        # ✅ 4) ids 必须有效
+        # 4) ids must be valid
         if not ids or ids == [0]:
             rospy.logwarn("[TakeOrderState] No valid order ids (got %s).", ids)
             return "failed"
 
-        # ✅ 5) 必须等到 /ask_follow_end=True（硬条件）
+        # 5) Must wait for /ask_follow_end=True (hard requirement)
         end_start = rospy.Time.now()
         while not rospy.is_shutdown():
             if self._done:
@@ -381,11 +402,13 @@ class TakeOrderState(smach.State):
                 return "failed"
             rate.sleep()
 
-        # ✅ 6) 三个条件都满足 -> succeeded
-        # 检查 order_ids 的大小，如果少于两个元素，填充默认 [1, 2]
+        # If all three conditions are met, the state succeeds.
+        # Check the size of order_ids. If it has fewer than two elements,
+        # it is padded with a default value of [1, 4] (cola and cereal).
+        # This is a fallback to prevent errors in the grasping pipeline if voice recognition fails.
         if len(ids) < 2:
             ids = [1, 4]
-            rospy.logwarn("[TakeOrderState] order_ids 少于两个元素，填充默认 [1, 2]")
+            rospy.logwarn("[TakeOrderState] order_ids has less than two elements, filling with default [1, 4]")
         userdata.order_ids = ids
         return "succeeded"
 
@@ -485,13 +508,20 @@ class AskTakeObjectsState(smach.State):
                     "[AskTakeObjectsState] No subscriber connected on %s within %.2fs",
                     self.say_topic, self.subscriber_timeout
                 )
-                # 不直接失败：仍然发布（有些系统订阅端可能稍后才连上；repeat/latch可提高成功率）
+                # Don't fail directly: still publish (some systems might connect subscribers later; repeat/latch can increase success rate)
                 return False
 
             rate.sleep()
 
         return False
     def send_gripper_cmd(self, positions, duration):
+        """
+        Sends a command to the gripper controller.
+        
+        Args:
+            positions: A list of two floats for the left and right finger joint positions.
+            duration: The time in seconds the gripper should take to reach the position.
+        """
         traj = JointTrajectory()
         traj.joint_names = [
             "gripper_left_finger_joint",
@@ -504,11 +534,13 @@ class AskTakeObjectsState(smach.State):
         traj.points.append(pt)
         traj.header.stamp = rospy.Time.now() + rospy.Duration(0.2)
 
+        # Publish the command multiple times to ensure it's received
         for _ in range(3):
             self.gripper_pub.publish(traj)
             rospy.sleep(0.1)
 
     def open_gripper(self):
+        """Opens the gripper to release an object."""
         self.send_gripper_cmd([0.04, 0.04], 3.5)
 
     def execute(self, userdata):
@@ -526,6 +558,7 @@ class AskTakeObjectsState(smach.State):
 
         # Publish sentence (optionally repeated)
         msg = String(data=self.sentence)
+        # After speaking, open the gripper to allow the customer to take the items.
         for i in range(self.repeat):
             self.say_pub.publish(msg)
             rospy.loginfo(
@@ -561,7 +594,7 @@ class AskTakeObjectsState(smach.State):
         # Always wait a bit so the speech can be heard
         if self.post_wait > 0:
             rospy.sleep(self.post_wait)
-
+        #After the customer has taken the objects, tuck the arm back to a safe position.
         # Tuck arm
         rospy.loginfo("Waiting for play_motion...")
         client = actionlib.SimpleActionClient("play_motion", PlayMotionAction)
@@ -585,21 +618,25 @@ class AskTakeObjectsState(smach.State):
 
 import signal
 
-        # 用于管理所有子进程，便于后续清理
+# Global list used to manage all child processes for later cleanup
+# This ensures proper termination of launched ROS nodes
 launched_processes = []
 
+# This state is responsible for preparing the robot for grasping an object.
+# It launches the `grasp_try.launch` file, which likely sets up the necessary nodes and services for the grasping pipeline.
+# This state ensures that the robot's arm and gripper are ready for the subsequent grasping operations.
 class PreGraspState(smach.State):
     def __init__(self):
         smach.State.__init__(self, outcomes=['succeeded', 'aborted'])
     def execute(self, userdata):
-        rospy.loginfo('[PreGraspState] 启动 grasp_try.launch...')
+        rospy.loginfo('[PreGraspState] Starting grasp_try.launch...')
         try:
             proc = subprocess.Popen(["roslaunch", "grasp", "grasp_try.launch"])
             launched_processes.append(proc)
-            rospy.sleep(2.0)  # 可根据实际情况调整等待时间
+            rospy.sleep(2.0)  # Adjust wait time as needed
             return 'succeeded'
         except Exception as e:
-            rospy.logerr(f"[PreGraspState] 启动失败: {e}")
+            rospy.logerr(f"[PreGraspState] Failed to start: {e}")
             return 'aborted'
 
 class OpenYoloState(smach.State):
@@ -607,41 +644,41 @@ class OpenYoloState(smach.State):
         smach.State.__init__(self, outcomes=['succeeded', 'aborted'])
         self.yolo_pub = rospy.Publisher('/startyolo', Bool, queue_size=1)
     def execute(self, userdata):
-        rospy.loginfo('[OpenYoloState] 通过 /startyolo 发布 True 启动 yolo...')
+        rospy.loginfo('[OpenYoloState] Starting yolo by publishing True to /startyolo...')
         try:
             self.yolo_pub.publish(Bool(data=True))
             rospy.sleep(1.0)
             return 'succeeded'
         except Exception as e:
-            rospy.logerr(f"[OpenYoloState] 发布 /startyolo 失败: {e}")
+            rospy.logerr(f"[OpenYoloState] Failed to publish to /startyolo: {e}")
             return 'aborted'
 
 class PlaneSegmentationState(smach.State):
     def __init__(self):
         smach.State.__init__(self, outcomes=['succeeded', 'aborted'])
     def execute(self, userdata):
-        rospy.loginfo('[PlaneSegmentationState] 启动 plane_segmentation_seg.launch...')
+        rospy.loginfo('[PlaneSegmentationState] Starting plane_segmentation_seg.launch...')
         try:
             proc = subprocess.Popen(["roslaunch", "plane_segmentation", "plane_segmentation_seg.launch"])
             launched_processes.append(proc)
             rospy.sleep(2.0)
             return 'succeeded'
         except Exception as e:
-            rospy.logerr(f"[PlaneSegmentationState] 启动失败: {e}")
+            rospy.logerr(f"[PlaneSegmentationState] Failed to start: {e}")
             return 'aborted'
 
 class ObjectLabelingState(smach.State):
     def __init__(self):
         smach.State.__init__(self, outcomes=['succeeded', 'aborted'])
     def execute(self, userdata):
-        rospy.loginfo('[ObjectLabelingState] 启动 object_labeling_seg.launch...')
+        rospy.loginfo('[ObjectLabelingState] Starting object_labeling_seg.launch...')
         try:
             proc = subprocess.Popen(["roslaunch", "object_labeling", "object_labeling_seg.launch"])
             launched_processes.append(proc)
             rospy.sleep(2.0)
             return 'succeeded'
         except Exception as e:
-            rospy.logerr(f"[ObjectLabelingState] 启动失败: {e}")
+            rospy.logerr(f"[ObjectLabelingState] Failed to start: {e}")
             return 'aborted'
 
 class RunGraspState(smach.State):
@@ -651,22 +688,25 @@ class RunGraspState(smach.State):
         self.received_cola = False
 
     def flow_callback(self, msg):
+        """Callback to monitor the grasping process completion.
+        Listens for specific object names that indicate successful grasping."""
         if msg.data == 'COLA' or msg.data == 'SPRITE' or msg.data == 'CEREAL' or msg.data == 'PLATE':
             self.received_cola = True
 
     def execute(self, userdata):
-        # 检查 order_ids 是否存在且为 list
+        # Check if order_ids exists and is a list
         if 'order_ids' not in userdata or not isinstance(userdata.order_ids, list):
-            rospy.logerr('[RunGraspState] order_ids 未提供或不是 list')
+            rospy.logerr('[RunGraspState] order_ids not provided or not a list')
             return 'aborted'
         
         
-        # 根据 order_ids 选择 launch_file
+        # Select launch_file based on order_ids
+        # Order ID mapping: 1=cola, 2=sprite, 4=cereal, empty=plate
         if not userdata.order_ids:
-            # list 为空，抓取托盘
+            # list is empty, grasp the tray
             launch_file = 'grasp_plate.launch'
         else:
-            # 取第一个并 pop
+            # Take the first item from the order queue and process it
             first = userdata.order_ids.pop(0)
             if first == 1:
                 launch_file = 'grasp_cola.launch'
@@ -675,36 +715,37 @@ class RunGraspState(smach.State):
             elif first == 4:
                 launch_file = 'grasp_cereal.launch'
             else:
-                rospy.logerr(f'[RunGraspState] 未知的 order id: {first}')
+                rospy.logerr(f'[RunGraspState] Unknown order id: {first}')
                 return 'aborted'
         
-        rospy.loginfo(f'[RunGraspState] 启动 {launch_file}...')
+        rospy.loginfo(f'[RunGraspState] Starting {launch_file}...')
         try:
             proc = subprocess.Popen(["roslaunch", "grasp", launch_file])
             launched_processes.append(proc)
             
-            # 订阅 /flow_result topic
+            # Subscribe to /flow_result topic
             self.flow_sub = rospy.Subscriber('/flow_result', String, self.flow_callback)
             self.received_cola = False
             
-            # 等待接收到 'cola' 消息，最多等待 180 秒
+            # Wait to receive completion message, with a timeout of 180 seconds
+            # This timeout is generous to account for complex grasping operations
             rate = rospy.Rate(10)
             start_time = rospy.Time.now()
-            timeout = 180.0
+            timeout = 180.0  # 3 minutes timeout for grasping operations
             while not self.received_cola and (rospy.Time.now() - start_time).to_sec() < timeout:
                 rate.sleep()
             
-            # 取消订阅
+            # Unsubscribe
             if self.flow_sub:
                 self.flow_sub.unregister()
             
             if self.received_cola:
                 return 'succeeded'
             else:
-                rospy.logwarn('[RunGraspState] 超时未收到 /flow_result 中的 完成抓取 消息')
+                rospy.logwarn('[RunGraspState] Timeout waiting for grasp completion message on /flow_result')
                 return 'aborted'
         except Exception as e:
-            rospy.logerr(f"[RunGraspState] 启动 {launch_file} 失败: {e}")
+            rospy.logerr(f"[RunGraspState] Failed to start {launch_file}: {e}")
             return 'aborted'
         
 class StopYoloState(smach.State):
@@ -726,15 +767,16 @@ class StopYoloState(smach.State):
             rospy.sleep(0.1)
 
     def execute(self, userdata):
-        rospy.loginfo('[StopYoloState] 通过 /stopyolo 发布 False 停止 yolo...')
+        rospy.loginfo('[StopYoloState] Stopping yolo by publishing False to /stopyolo...')
         try:
             self.yolo_pub.publish(Bool(data=True))
             rospy.sleep(1.0)
+            # Reset head to neutral position for safe navigation
             self.move_head([0.0, 0.0], 1.0)
             rospy.loginfo('[StopYoloState] Head moved to [0.0, 0.0]')
             return 'succeeded'
         except Exception as e:
-            rospy.logerr(f"[StopYoloState] 发布 /stopyolo 失败: {e}")
+            rospy.logerr(f"[StopYoloState] Failed to publish to /stopyolo: {e}")
             return 'aborted'
 
 class CleanUpState(smach.State):
@@ -746,11 +788,11 @@ class CleanUpState(smach.State):
         for proc in launched_processes:
             try:
                 proc.terminate()
-                proc.wait(timeout=5.0)  # 等待进程终止，最多5秒
+                proc.wait(timeout=5.0)  # Wait for process to terminate, max 5 seconds
             except subprocess.TimeoutExpired:
-                proc.kill()  # 如果terminate没成功，强制kill
+                proc.kill()  # Force kill if terminate fails
                 proc.wait()
-        launched_processes = []  # 清空列表
+        launched_processes = []  # Clear the list
         return 'succeeded'
 
 class AskBarMan(smach.State):
@@ -759,7 +801,7 @@ class AskBarMan(smach.State):
         self.say_pub = rospy.Publisher('/the_word_to_say', String, queue_size=10)
     def execute(self, userdata):
         ids = userdata.order_ids
-        rospy.loginfo('[AskBarMan] 读取到的 order_ids: %s', ids)
+        rospy.loginfo('[AskBarMan] Read order_ids: %s', ids)
         drink_names = {1: 'cola', 2: 'sprite', 4: 'cereal'}
         if len(ids)==0:
             sentence = "The order is finished. I will grasp the tray."
@@ -771,11 +813,18 @@ class AskBarMan(smach.State):
             object1 = drink_names.get(ids[0], 'unknown drink')
             sentence = f"Please put {object1} on the table."    
         self.say_pub.publish(String(data=sentence))
-        rospy.loginfo('[AskBarMan] 发布了句子: %s', sentence)
+        rospy.loginfo('[AskBarMan] Published sentence: %s', sentence)
         rospy.sleep(5.0)
         return 'succeeded'
     
 # Main function to initialize and run the TiaGo state machine.
+# This creates a complete workflow for a service robot in a restaurant/party scenario:
+# 1. Localize the robot in the environment
+# 2. Navigate to start position and search for customers
+# 3. Take the customer's order using voice recognition
+# 4. Navigate to the bar and coordinate with bartender
+# 5. Execute grasping pipeline for each ordered item
+# 6. Return to customer and deliver the items
 def main():
     rospy.init_node('tiago_party_state_machine')
     sm = smach.StateMachine(outcomes=['TASK_COMPLETED', 'TASK_FAILED'])
@@ -799,16 +848,16 @@ def main():
         
         rospy.loginfo("Adding NAV_TO_PERSON")
         # # Start all these nodes in a new terminal each at the total beginning.
-        # # roslaunch yolo_v8_detector yolo_v8_detector.launch
-        # # roslaunch wave_customer_detect detect_wave.launch
-        # # roslaunch tiago_wave_customer_localizer waving_person_localizer.launch
+        # roslaunch yolo_v8_detector yolo_v8.launch
+        # roslaunch wave_customer_detect detect_wave.launch
+        # roslaunch tiago_wave_customer_localizer waving_person_localizer.launch
         nav_to_person_state = NavigateToCoordinates('coordinates')
         smach.StateMachine.add('NAV_TO_PERSON', nav_to_person_state,
                        transitions={'succeeded': 'TAKE_ORDER',
                             'failed': 'TASK_FAILED'})
 
-        # TODO: Add the state of taking order from the customer using speech recognition wit
-        # rospy.loginfo("Adding TAKE_ORDER")
+        # The TAKE_ORDER state uses voice recognition to get the customer's order.
+        # It outputs the order_ids to be used by the grasping states.
         smach.StateMachine.add('TAKE_ORDER', TakeOrderState(),
                        transitions={'succeeded': 'NAV_TO_BAR',
                             'failed': 'TASK_FAILED'})
@@ -819,8 +868,9 @@ def main():
                        transitions={'succeeded': 'ASK_BARMAN',
                             'failed': 'TASK_FAILED'})
         
-        #####################################################################################
-        # Grasping pipeline: 依次启动各节点，完成抓取任务 For Object 1
+        # Grasping pipeline: sequentially start nodes to complete the grasping task for Object 1
+        # The pipeline consists of: ASK_BARMAN -> PRE_GRASP -> START_YOLO -> PLANE_SEGMENTATION
+        # -> OBJECT_LABELING -> RUN_GRASP -> CLEAN_UP_STATE
 
         smach.StateMachine.add('ASK_BARMAN', AskBarMan(),
                        transitions={'succeeded': 'PRE_GRASP'},
@@ -847,7 +897,7 @@ def main():
                             'aborted': 'TASK_FAILED'})
 
         rospy.loginfo("Adding RUN_GRASP")
-        # 假设 drink 已经存储在状态机的 userdata 中
+        # Assume the drink is already stored in the state machine's userdata
         smach.StateMachine.add('RUN_GRASP', RunGraspState(),
                    transitions={'succeeded': 'CLEAN_UP_STATE',
                         'aborted': 'TASK_FAILED'},
@@ -856,8 +906,10 @@ def main():
         rospy.loginfo("Cleaning up launched processes")
         smach.StateMachine.add('CLEAN_UP_STATE', CleanUpState(),
                        transitions={'succeeded': 'ASK_BARMAN_2'})
-        #####################################################################################
-        # Grasping pipeline: 依次启动各节点，完成抓取任务 For Object 2
+        
+        # Grasping pipeline for Object 2: Similar to Object 1 but processes the next item in order_ids
+        # This allows the robot to handle multiple items in a single order sequentially
+
         smach.StateMachine.add('ASK_BARMAN_2', AskBarMan(),
                        transitions={'succeeded': 'PLANE_SEGMENTATION_2'},
                        remapping={'order_ids': 'order_ids'})
@@ -881,8 +933,10 @@ def main():
         rospy.loginfo("Cleaning up launched processes")
         smach.StateMachine.add('CLEAN_UP_STATE_2', CleanUpState(),
                        transitions={'succeeded': 'ASK_BARMAN_3'})
-        ###################################################################################
-        # Grasp Plate
+        
+        # Final grasping sequence: Plate/Tray
+        # After all drink items are processed, grasp the serving plate/tray
+
         smach.StateMachine.add('ASK_BARMAN_3', AskBarMan(),
                 transitions={'succeeded': 'PLANE_SEGMENTATION_3'},
                 remapping={'order_ids': 'order_ids'})
@@ -911,28 +965,27 @@ def main():
         smach.StateMachine.add('STOP_YOLO', StopYoloState(),
                        transitions={'succeeded': 'NAV_TO_SAVED_PERSON',
                             'aborted': 'TASK_FAILED'})
-        ###################################################################################
 
         smach.StateMachine.add('NAV_TO_SAVED_PERSON', NavToSavedPose(nav_to_person_state),
                    transitions={'succeeded': 'ASK_TAKE_OBJECTS',
                         'failed': 'TASK_FAILED'})
         
         
-        # TODO: Ask customer to take the objects from the tray.(RobotSpeaking)
+        # The robot asks the customer to take the objects from the tray.
         rospy.loginfo("Adding ASK_TAKE_OBJECTS")
         smach.StateMachine.add('ASK_TAKE_OBJECTS', AskTakeObjectsState(),
                        transitions={'succeeded': 'NAV_TO_START2',
                             'failed': 'TASK_FAILED'})
 
-        ###############################################################################
-        # TODO: Move back to start point
+        # The robot moves back to its starting position to complete the task.
         rospy.loginfo("Adding NAV_TO_START")
         smach.StateMachine.add('NAV_TO_START2', NavigateToWaypoint('start_position'),
                                transitions={'succeeded': 'TASK_COMPLETED',
                                             'failed': 'TASK_FAILED'})
-        ###############################################################################
+
 
     # Start introspection server for state machine visualization
+    # This allows monitoring the state machine execution via 'rosrun smach_viewer smach_viewer.py'
     sis = smach_ros.IntrospectionServer('server_name', sm, '/SM_ROOT')
     sis.start()
     outcome = sm.execute()

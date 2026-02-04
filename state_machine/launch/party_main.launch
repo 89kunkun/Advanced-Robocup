@@ -1,14 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <launch>
-  <!-- 加载导航坐标参数 -->
+  <!-- Load waypoints from YAML file into ROS parameter server -->
   <rosparam file="$(find state_machine)/param/waypoints.yaml" command="load" />
-  
-  <!-- 启动主状态机 -->
+
+  <!-- Launch the main state machine node -->
   <node pkg="state_machine" type="main_state_machine.py" name="state_machine" output="screen" />
 
-  <!-- 启动可视化SMACH（可选） -->
+  <!-- Launch SMACH viewer for state machine visualization -->
   <node pkg="smach_viewer" type="smach_viewer.py" name="smach_viewer" output="screen" />
 
+  <!-- Launch RViz with navigation configuration -->
   <node pkg="rviz" type="rviz" name="rviz" output="screen"
         args="-d $(find tiago_2dnav)/config/rviz/navigation.rviz" />
 </launch>
