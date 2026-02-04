@@ -16,11 +16,18 @@ from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 
 
 class WavingPersonLocalizer(object):
+    """
+    Localizes a waving person in 3D using depth and bounding box information, then publishes the target position for robot navigation.
+    Optionally, sends navigation goals to move_base so the robot approaches the customer and faces them at a specified distance.
+    """
     def __init__(self):
-        # --- 初始化 node ---
+        """
+        Initializes ROS node, parameters, subscribers, publishers, and optionally the move_base action client.
+        """
+        # --- Initialize node ---
         rospy.init_node("waving_person_localizer")
 
-        # 参数
+        # Parameters
         self.depth_topic = rospy.get_param("~depth_topic", "/xtion/depth_registered/image_raw")
         self.camera_info_topic = rospy.get_param("~camera_info_topic", "/xtion/rgb/camera_info")
         self.bbox_topic = rospy.get_param("~bbox_topic", "/wave_customer_detect/waving_person_bbox")
@@ -28,26 +35,26 @@ class WavingPersonLocalizer(object):
         self.map_frame = rospy.get_param("~map_frame", "map")
         self.base_frame = rospy.get_param("~base_frame", "base_link")
 
-        # 机器人希望离客人的距离（米）
+        # Desired distance between robot and customer (meters)
         self.target_distance = rospy.get_param("~target_distance", 1.2)
         
-        # 是否使用move_base导航
+        # Whether to use move_base for navigation
         self.use_move_base = rospy.get_param("~use_move_base", False)
         
-        # Cooldown机制:避免频繁发送导航目标
+        # Cooldown mechanism: avoid sending navigation goals too frequently
         self.navigation_cooldown = rospy.get_param("~navigation_cooldown", 5.0)  # 秒
         self.last_navigation_time = rospy.Time(0)
 
-        # 内部状态
+        # Internal state
         self.bridge = CvBridge()
         self.depth_img = None
         self.fx = self.fy = self.cx = self.cy = None
 
-        # TF buffer
+        # TF buffer for coordinate transforms
         self.tfb = tf2_ros.Buffer()
         self.tfl = tf2_ros.TransformListener(self.tfb)
 
-        # 订阅者
+        # Subscribers
         self.depth_sub = rospy.Subscriber(
             self.depth_topic, Image, self.depth_cb, queue_size=1
         )
@@ -58,12 +65,12 @@ class WavingPersonLocalizer(object):
             self.bbox_topic, RegionOfInterest, self.bbox_cb, queue_size=1
         )
 
-        # 发布者：兼容原作者的 coordinates 话题（目标点）
+        # Publisher: compatible with original author's 'coordinates' topic (goal point)
         self.coord_pub = rospy.Publisher("coordinates", Point, queue_size=10)
-        # 发布人位置（map 下）
+        # Publisher: person's position in map frame
         self.person_pub = rospy.Publisher("/wave_customer_detect/person_point_map", Point, queue_size=10)
         
-        # move_base action client (可选)
+        # move_base action client (optional)
         self.move_base_client = None
         if self.use_move_base:
             rospy.loginfo("[waving_person_localizer] Initializing move_base action client...")
@@ -81,17 +88,21 @@ class WavingPersonLocalizer(object):
         rospy.loginfo("  target_distance:    %.2f m", self.target_distance)
         rospy.loginfo("  use_move_base:      %s", self.use_move_base)
 
-    # --- 回调函数 ---
+    # --- Callback functions ---
 
     def depth_cb(self, msg):
-        """保存最近一帧深度图"""
+        """
+        Callback for depth image topic. Converts and stores the latest depth image for later use in localization.
+        """
         try:
             self.depth_img = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
         except Exception as e:
             rospy.logwarn_throttle(2.0, "[localizer] Failed to convert depth image: %s", e)
 
     def caminfo_cb(self, msg):
-        """保存相机内参"""
+        """
+        Callback for camera info topic. Stores camera intrinsic parameters for 3D point calculation.
+        """
         K = msg.K  # row-major 3x3
         self.fx = K[0]
         self.fy = K[4]
@@ -99,16 +110,22 @@ class WavingPersonLocalizer(object):
         self.cy = K[5]
 
     def bbox_cb(self, roi):
-        """收到挥手顾客的 bbox 时，计算 3D 点并发布 coordinates"""
+        """
+        Callback for bounding box topic. When a waving customer is detected:
+        1. Computes the 3D position of the customer using depth and camera info.
+        2. Publishes the position for visualization and navigation.
+        3. Calculates a goal position for the robot to approach and face the customer at a safe distance.
+        4. Optionally sends a navigation goal to move_base.
+        """
         if self.depth_img is None or self.fx is None:
             rospy.logwarn_throttle(2.0, "[localizer] No depth image or camera info yet.")
             return
 
-        # 1) bbox 中心像素坐标
+        # 1) Center pixel coordinates of bbox
         u_center = roi.x_offset + roi.width / 2.0
         v_center = roi.y_offset + roi.height / 2.0
 
-        # 2) 在 bbox 中心附近取一个小窗口，做深度平均（中位数更稳）
+        # 2) Take a small window around bbox center, calculate average depth (median is more stable)
         h, w = self.depth_img.shape[:2]
 
         u_min = int(max(0, min(w - 1, u_center - 5)))
@@ -122,9 +139,9 @@ class WavingPersonLocalizer(object):
             rospy.logwarn_throttle(1.0, "[localizer] No valid depth in bbox region.")
             return
 
-        d = float(np.median(valid))  # 深度（米）
+        d = float(np.median(valid))  # Depth (meters)
 
-        # 3) 像素 + 深度 -> 相机坐标系下的 3D
+        # 3) Pixel + depth -> 3D point in camera coordinate frame
         X_c = (u_center - self.cx) * d / self.fx
         Y_c = (v_center - self.cy) * d / self.fy
         Z_c = d
@@ -136,7 +153,7 @@ class WavingPersonLocalizer(object):
         pt_cam.point.y = Y_c
         pt_cam.point.z = Z_c
 
-        # 4) 用 TF 转换到 map 坐标系（得到客人在地图中的位置）
+        # 4) Use TF to transform to map frame (get customer's position in map)
         try:
             pt_map = self.tfb.transform(pt_cam, self.map_frame, rospy.Duration(0.2))
         except Exception as e:
@@ -146,14 +163,14 @@ class WavingPersonLocalizer(object):
         person_x = pt_map.point.x
         person_y = pt_map.point.y
 
-        # 发布 person 点（方便你在 RViz 调试）
+        # Publish person point (for RViz debugging)
         person_point = Point()
         person_point.x = person_x
         person_point.y = person_y
         person_point.z = 0.0
         self.person_pub.publish(person_point)
 
-        # 5) 拿机器人当前位置（base_link 在 map 中）
+        # 5) Get robot's current position (base_link in map)
         try:
             origin = PointStamped()
             origin.header.stamp = rospy.Time(0)
@@ -170,7 +187,7 @@ class WavingPersonLocalizer(object):
         base_x = base_in_map.point.x
         base_y = base_in_map.point.y
 
-        # 6) 计算从机器人指向人的向量
+        # 6) Calculate vector from robot to person
         dx = person_x - base_x
         dy = person_y - base_y
         dist = np.hypot(dx, dy)
@@ -181,19 +198,19 @@ class WavingPersonLocalizer(object):
 
         d_target = self.target_distance
 
-        # ---- 关键逻辑：在“距人 d_target 的圆里，选离机器人最近的点” ----
+        # ---- Key logic: On the circle with radius d_target from person, select the point closest to robot ----
         if dist <= d_target:
-            # 已经在圆内：最近点就是当前 base 位置（不再前进）
+            # Already inside the circle: closest point is current base position (do not move forward)
             goal_x = base_x
             goal_y = base_y
         else:
-            # 在圆外：取圆周上距离机器人最近的点 = person - u * d_target
+            # Outside the circle: take the point on the circle closest to robot = person - u * d_target
             ux = dx / dist
             uy = dy / dist
             goal_x = person_x - ux * d_target
             goal_y = person_y - uy * d_target
 
-        # 打印调试信息：三点之间的距离关系
+        # Print debug info: distance relations among three points
         dist_goal_person = np.hypot(goal_x - person_x, goal_y - person_y)
         dist_goal_base   = np.hypot(goal_x - base_x,  goal_y - base_y)
 
@@ -205,7 +222,7 @@ class WavingPersonLocalizer(object):
             dist, dist_goal_person, dist_goal_base
         )
 
-        # 7) 发布到 coordinates（兼容原 base_controller）
+        # 7) Publish to 'coordinates' topic (compatible with original base_controller)
         goal_point = Point()
         goal_point.x = goal_x
         goal_point.y = goal_y
@@ -213,22 +230,24 @@ class WavingPersonLocalizer(object):
         self.coord_pub.publish(goal_point)
         rospy.loginfo("[localizer] Published goal to 'coordinates' topic")
 
-        # 8) 可选：如果启用了move_base，直接发送导航目标
+        # 8) Optional: if move_base is enabled, send navigation goal directly
         if self.use_move_base and self.move_base_client is not None:
-            # 再次检查cooldown (防止重复发送)
+            # Check cooldown again (prevent repeated sending)
             current_time = rospy.Time.now()
             time_since_last = (current_time - self.last_navigation_time).to_sec()
             if time_since_last >= self.navigation_cooldown:
                 self.send_move_base_goal(goal_x, goal_y, person_x, person_y)
-                # 更新最后导航时间
+                # Update last navigation time
                 self.last_navigation_time = current_time
-                rospy.logwarn("[localizer] 🎯 Navigation goal sent! Next goal in %.1fs", self.navigation_cooldown)
+                rospy.logwarn("[localizer] Navigation goal sent! Next goal in %.1fs", self.navigation_cooldown)
             else:
                 rospy.loginfo("[localizer] Skipping navigation goal (cooldown: %.1fs remaining)", 
                               self.navigation_cooldown - time_since_last)
 
     def send_move_base_goal(self, goal_x, goal_y, person_x, person_y):
-        """发送MoveBase导航目标（让机器人在 goal 点上面向人）"""
+        """
+        Sends a navigation goal to move_base so the robot moves to the goal position and faces the customer.
+        """
         goal = MoveBaseGoal()
         goal.target_pose.header.frame_id = self.map_frame
         goal.target_pose.header.stamp = rospy.Time.now()
@@ -237,7 +256,7 @@ class WavingPersonLocalizer(object):
         goal.target_pose.pose.position.y = goal_y
         goal.target_pose.pose.position.z = 0.0
         
-        # 用“从 goal 指向 person”的方向作为目标朝向
+        # Use direction from goal to person as target orientation
         yaw = np.arctan2(person_y - goal_y, person_x - goal_x)
         goal.target_pose.pose.orientation = self.yaw_to_quaternion(yaw)
         
@@ -247,7 +266,9 @@ class WavingPersonLocalizer(object):
 
     @staticmethod
     def yaw_to_quaternion(yaw):
-        """将yaw角转换为四元数"""
+        """
+        Converts a yaw angle (in radians) to a quaternion for robot orientation.
+        """
         q = Quaternion()
         q.x = 0.0
         q.y = 0.0
@@ -257,5 +278,6 @@ class WavingPersonLocalizer(object):
 
 
 if __name__ == "__main__":
+    # Entry point: start the localizer node and keep it running
     node = WavingPersonLocalizer()
     rospy.spin()
