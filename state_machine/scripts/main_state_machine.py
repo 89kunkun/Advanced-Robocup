@@ -27,6 +27,8 @@ from sensor_msgs.msg import Image, CameraInfo
 from cv_bridge import CvBridge, CvBridgeError
 import actionlib
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+from play_motion_msgs.msg import PlayMotionAction, PlayMotionGoal
+from sensor_msgs.msg import JointState
 
 
 # State for robot localization using AMCL and global localization service with own defined spin speed and threshold values.
@@ -382,7 +384,7 @@ class TakeOrderState(smach.State):
         # ✅ 6) 三个条件都满足 -> succeeded
         # 检查 order_ids 的大小，如果少于两个元素，填充默认 [1, 2]
         if len(ids) < 2:
-            ids = [1, 2]
+            ids = [1, 4]
             rospy.logwarn("[TakeOrderState] order_ids 少于两个元素，填充默认 [1, 2]")
         userdata.order_ids = ids
         return "succeeded"
@@ -442,7 +444,10 @@ class AskTakeObjectsState(smach.State):
         self.subscriber_timeout = float(subscriber_timeout)
         self.latch = bool(latch)
         self.pre_wait = float(pre_wait)
-
+        # Publisher for gripper command (to open/close)
+        self.gripper_pub = rospy.Publisher(
+            "/gripper_controller/command", JointTrajectory, queue_size=1,
+        )
         # Publisher (optionally latched)
         self.say_pub = rospy.Publisher(
             self.say_topic,
@@ -486,6 +491,25 @@ class AskTakeObjectsState(smach.State):
             rate.sleep()
 
         return False
+    def send_gripper_cmd(self, positions, duration):
+        traj = JointTrajectory()
+        traj.joint_names = [
+            "gripper_left_finger_joint",
+            "gripper_right_finger_joint",
+        ]
+
+        pt = JointTrajectoryPoint()
+        pt.positions = positions
+        pt.time_from_start = rospy.Duration(duration)
+        traj.points.append(pt)
+        traj.header.stamp = rospy.Time.now() + rospy.Duration(0.2)
+
+        for _ in range(3):
+            self.gripper_pub.publish(traj)
+            rospy.sleep(0.1)
+
+    def open_gripper(self):
+        self.send_gripper_cmd([0.04, 0.04], 3.5)
 
     def execute(self, userdata):
         rospy.loginfo("[AskTakeObjectsState] Saying: %s", self.sentence)
@@ -511,13 +535,15 @@ class AskTakeObjectsState(smach.State):
 
             if i < self.repeat - 1:
                 rospy.sleep(self.repeat_interval)
-
+        self.open_gripper()
+        rospy.sleep(4.0)
         # If you have an ack topic, wait for it
         if self.ack_topic:
             rospy.loginfo(
                 "[AskTakeObjectsState] Waiting ack on %s (timeout=%.1fs)",
                 self.ack_topic, self.ack_timeout
             )
+
             start = rospy.Time.now()
             rate = rospy.Rate(10)
 
@@ -535,6 +561,24 @@ class AskTakeObjectsState(smach.State):
         # Always wait a bit so the speech can be heard
         if self.post_wait > 0:
             rospy.sleep(self.post_wait)
+
+        # Tuck arm
+        rospy.loginfo("Waiting for play_motion...")
+        client = actionlib.SimpleActionClient("play_motion", PlayMotionAction)
+        client.wait_for_server()
+        rospy.loginfo("...connected.")
+
+        rospy.wait_for_message("joint_states", JointState)
+        rospy.sleep(3.0)
+
+        rospy.loginfo("Tuck arm...")
+        goal = PlayMotionGoal()
+        goal.motion_name = 'home'
+        goal.skip_planning = False
+
+        client.send_goal(goal)
+        client.wait_for_result(rospy.Duration(10.0))
+        rospy.loginfo("Arm tucked.")
 
         return 'succeeded'
 
@@ -667,11 +711,27 @@ class StopYoloState(smach.State):
     def __init__(self):
         smach.State.__init__(self, outcomes=['succeeded', 'aborted'])
         self.yolo_pub = rospy.Publisher('/stopyolo', Bool, queue_size=1)
+        self.head_pub = rospy.Publisher("/head_controller/command", JointTrajectory, queue_size=1)
+
+    def move_head(self, positions, duration):
+        traj = JointTrajectory()
+        traj.joint_names = ["head_1_joint", "head_2_joint"]
+        pt = JointTrajectoryPoint()
+        pt.positions = positions
+        pt.time_from_start = rospy.Duration(duration)
+        traj.points.append(pt)
+        traj.header.stamp = rospy.Time.now() + rospy.Duration(0.2)
+        for _ in range(3):
+            self.head_pub.publish(traj)
+            rospy.sleep(0.1)
+
     def execute(self, userdata):
         rospy.loginfo('[StopYoloState] 通过 /stopyolo 发布 False 停止 yolo...')
         try:
             self.yolo_pub.publish(Bool(data=True))
             rospy.sleep(1.0)
+            self.move_head([0.0, 0.0], 1.0)
+            rospy.loginfo('[StopYoloState] Head moved to [0.0, 0.0]')
             return 'succeeded'
         except Exception as e:
             rospy.logerr(f"[StopYoloState] 发布 /stopyolo 失败: {e}")
@@ -693,8 +753,27 @@ class CleanUpState(smach.State):
         launched_processes = []  # 清空列表
         return 'succeeded'
 
-# 可选：后续可添加 CleanUpState 用于关闭所有子进程
-
+class AskBarMan(smach.State):
+    def __init__(self):
+        smach.State.__init__(self, outcomes=['succeeded'], input_keys=['order_ids'])
+        self.say_pub = rospy.Publisher('/the_word_to_say', String, queue_size=10)
+    def execute(self, userdata):
+        ids = userdata.order_ids
+        rospy.loginfo('[AskBarMan] 读取到的 order_ids: %s', ids)
+        drink_names = {1: 'cola', 2: 'sprite', 4: 'cereal'}
+        if len(ids)==0:
+            sentence = "The order is finished. I will grasp the tray."
+        elif len(ids)==2:
+            object1 = drink_names.get(ids[0], 'unknown drink')
+            object2 = drink_names.get(ids[1], 'unknown drink')
+            sentence = f"The customer wants {object1} and {object2}. Now please put {object1} on the table." 
+        elif len(ids)==1:
+            object1 = drink_names.get(ids[0], 'unknown drink')
+            sentence = f"Please put {object1} on the table."    
+        self.say_pub.publish(String(data=sentence))
+        rospy.loginfo('[AskBarMan] 发布了句子: %s', sentence)
+        rospy.sleep(5.0)
+        return 'succeeded'
     
 # Main function to initialize and run the TiaGo state machine.
 def main():
@@ -737,11 +816,16 @@ def main():
 
         rospy.loginfo("Adding NAV_TO_BAR")
         smach.StateMachine.add('NAV_TO_BAR', NavigateToWaypoint('bar_table_position'),
-                       transitions={'succeeded': 'PRE_GRASP',
+                       transitions={'succeeded': 'ASK_BARMAN',
                             'failed': 'TASK_FAILED'})
         
         #####################################################################################
         # Grasping pipeline: 依次启动各节点，完成抓取任务 For Object 1
+
+        smach.StateMachine.add('ASK_BARMAN', AskBarMan(),
+                       transitions={'succeeded': 'PRE_GRASP'},
+                       remapping={'order_ids': 'order_ids'})
+        
         rospy.loginfo("Adding PRE_GRASP")
         smach.StateMachine.add('PRE_GRASP', PreGraspState(),
                        transitions={'succeeded': 'START_YOLO',
@@ -771,10 +855,13 @@ def main():
         
         rospy.loginfo("Cleaning up launched processes")
         smach.StateMachine.add('CLEAN_UP_STATE', CleanUpState(),
-                       transitions={'succeeded': 'PLANE_SEGMENTATION_2'})
+                       transitions={'succeeded': 'ASK_BARMAN_2'})
         #####################################################################################
         # Grasping pipeline: 依次启动各节点，完成抓取任务 For Object 2
-
+        smach.StateMachine.add('ASK_BARMAN_2', AskBarMan(),
+                       transitions={'succeeded': 'PLANE_SEGMENTATION_2'},
+                       remapping={'order_ids': 'order_ids'})
+        
         rospy.loginfo("Adding PLANE_SEGMENTATION")
         smach.StateMachine.add('PLANE_SEGMENTATION_2', PlaneSegmentationState(),
                        transitions={'succeeded': 'OBJECT_LABELING_2',
@@ -793,9 +880,13 @@ def main():
         
         rospy.loginfo("Cleaning up launched processes")
         smach.StateMachine.add('CLEAN_UP_STATE_2', CleanUpState(),
-                       transitions={'succeeded': 'PLANE_SEGMENTATION_3'})
+                       transitions={'succeeded': 'ASK_BARMAN_3'})
         ###################################################################################
         # Grasp Plate
+        smach.StateMachine.add('ASK_BARMAN_3', AskBarMan(),
+                transitions={'succeeded': 'PLANE_SEGMENTATION_3'},
+                remapping={'order_ids': 'order_ids'})
+        
         rospy.loginfo("Adding PLANE_SEGMENTATION")
         smach.StateMachine.add('PLANE_SEGMENTATION_3', PlaneSegmentationState(),
                        transitions={'succeeded': 'OBJECT_LABELING_3',

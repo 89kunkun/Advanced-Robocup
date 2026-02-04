@@ -75,7 +75,7 @@ class GrasperPy:
         self.table_size_x = float(rospy.get_param("~table_size_x", 0.5))
         self.table_size_y = float(rospy.get_param("~table_size_y", 1.3))
         self.table_thickness = float(rospy.get_param("~table_thickness", 0.4))
-        self.table_z_offset = float(rospy.get_param("~table_z_offset", 0.04))
+        self.table_z_offset = float(rospy.get_param("~table_z_offset", 0.03))
         self.table_object_id = rospy.get_param("~table_object_id", "table")
         self.table_added = False
 
@@ -106,7 +106,7 @@ class GrasperPy:
         #     rospy.get_param("~pregrasp_offset_y", 0.0),
         #     rospy.get_param("~pregrasp_offset_z", 0.0),
         # ], dtype=float)
-        self.pregrasp_dist = rospy.get_param("~pregrasp_dist", 0.35)
+        self.pregrasp_dist = rospy.get_param("~pregrasp_dist", 0.33)
 
         # Cartesian approach direction (in ref_frame), normalized internally
         self.approach_dist = rospy.get_param("~approach_dist", 0.15)
@@ -117,7 +117,7 @@ class GrasperPy:
         self.place_x_offset = float(rospy.get_param("~place_x_offset", -0.15))
         self.place_y_offset = float(rospy.get_param("~place_y_offset", 0.0))
         self.place_z_offset = float(rospy.get_param("~place_z_offset", 0.10))
-        self.place_retreat_up = float(rospy.get_param("~place_retreat_up", 0.1))
+        self.place_retreat_up = float(rospy.get_param("~place_retreat_up", 0.15))
 
         # ============================
         # TF buffer (for marker -> base_link)
@@ -205,6 +205,11 @@ class GrasperPy:
             rospy.logwarn("[GrasperPy] Waiting for full PCA axes...")
             return
 
+        # Plate center readiness (match PCA-style gating)
+        if self.plate_center_msg is None:
+            rospy.logwarn("[GrasperPy] Waiting for /plate_center...")
+            return
+
         if not self.table_added:
             if self.table_center_msg is None:
                 timeout = float(rospy.get_param("~table_wait_timeout", 2.0))
@@ -244,21 +249,9 @@ class GrasperPy:
         #         )
         #         self.place_source = "table"
 
-        # Plate center decision
-        plate_timeout = rospy.Duration(rospy.get_param("~plate_wait_timeout", 5.0))
-        start = rospy.Time.now()
-
-        while self.plate_center_msg is None:
-            if rospy.Time.now() - start > plate_timeout:
-                break
-            rospy.sleep(0.05)
-
-        if self.plate_center_msg is not None:
-            self.place_source = "plate"
-            rospy.loginfo("[GrasperPy] Using /plate_center as place point.")
-        else:
-            self.place_source = "table"
-            rospy.loginfo("[GrasperPy] Using /table_center as place point.")
+        # Plate center is required before proceeding
+        self.place_source = "plate"
+        rospy.loginfo("[GrasperPy] Using /plate_center as place point.")
  
         self.executed = True
         rospy.loginfo(
@@ -269,7 +262,7 @@ class GrasperPy:
         # Freeze perception immediately
         rospy.loginfo(
             "[GrasperPy] Perception ready: PCA ok | table ok | plate=%s",
-            "ok" if self.plate_center_msg is not None else "fallback"
+            "ok"
         )
         self.freeze_perception()
 
@@ -711,7 +704,7 @@ class GrasperPy:
     # Gripper
     # ======================================================
     def close_gripper(self):
-        self.send_gripper_cmd([0.015, 0.015], 3.0)
+        self.send_gripper_cmd([0.018, 0.018], 3.0)
 
     def open_gripper(self):
         self.send_gripper_cmd([0.04, 0.04], 3.5)
@@ -727,7 +720,6 @@ class GrasperPy:
         pt.positions = positions
         pt.time_from_start = rospy.Duration(duration)
         traj.points.append(pt)
-
         traj.header.stamp = rospy.Time.now() + rospy.Duration(0.2)
 
         for _ in range(3):

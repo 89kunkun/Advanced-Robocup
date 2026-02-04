@@ -3,6 +3,8 @@ import rospy
 import subprocess
 from std_msgs.msg import Bool, String
 
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+
 class FlowManager:
     def __init__(self):
         rospy.init_node("flow_manager")
@@ -23,6 +25,10 @@ class FlowManager:
 
         self.flow_pub = rospy.Publisher(
             "/flow_result", String, queue_size=1, latch=True
+        )
+
+        self.gripper_pub = rospy.Publisher(
+            "/gripper_controller/command", JointTrajectory, queue_size=1
         )
 
         rospy.loginfo("[FlowManager] Waiting for grasp result ...")
@@ -54,6 +60,10 @@ class FlowManager:
         self.finished = True
         rospy.logerr("[FlowManager] Grasp FAILED: %s", msg.data)
 
+        rospy.loginfo("[FlowManager] Open gripper ...")
+        self._open_gripper()
+        rospy.sleep(0.8)
+
         self._tuck_arm()
 
         rospy.loginfo("[FlowManager] Publishing flow_result=FAILED")
@@ -67,6 +77,26 @@ class FlowManager:
             rospy.loginfo("[FlowManager] Tuck arm finished")
         except Exception as e:
             rospy.logerr("[FlowManager] Tuck arm failed: %s", str(e))
+
+    def _open_gripper(self):
+        self.send_gripper_cmd([0.04, 0.04], 3.5)
+
+    def send_gripper_cmd(self, positions, duration):
+        traj = JointTrajectory()
+        traj.joint_names = [
+            "gripper_left_finger_joint",
+            "gripper_right_finger_joint",
+        ]
+
+        pt = JointTrajectoryPoint()
+        pt.positions = positions
+        pt.time_from_start = rospy.Duration(duration)
+        traj.points.append(pt)
+        traj.header.stamp = rospy.Time.now() + rospy.Duration(0.2)
+
+        for _ in range(3):
+            self.gripper_pub.publish(traj)
+            rospy.sleep(0.1)
 
 if __name__ == "__main__":
     FlowManager()

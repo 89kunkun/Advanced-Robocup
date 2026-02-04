@@ -185,6 +185,7 @@ catkin_install_python(PROGRAMS
   scripts/grasp_plate.py
   scripts/flower_manager.py
   scripts/flower_manager_plate.py
+  scripts/plate_overhang_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

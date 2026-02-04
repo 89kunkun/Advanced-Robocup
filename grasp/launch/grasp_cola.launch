@@ -15,9 +15,11 @@
 
   <!-- Start the grasping node -->
   <node name="grasp_pca" pkg="grasp" type="grasp_pca.py"  output="screen">
-    <param name="place_drop" value="0.18"/>
-    <param name="approach_dist" value="0.13"/>
+    <param name="place_drop" value="0.13"/>
+    <param name="approach_dist" value="0.12"/>""
+    <param name="lift_dist" value="0.16"/>
     <param name="place_offset_y" value="0.1"/>
+    <param name="place_x_offset" value="-0.10"/>
   </node>
 
   <!-- Flow manager -->

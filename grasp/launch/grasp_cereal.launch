@@ -15,15 +15,15 @@
   <!-- Start the grasping node -->
   <node name="grasp_pca" pkg="grasp" type="grasp_pca.py"  output="screen">
     <param name="y_offset" value="0.01"/>
-    <param name="place_drop" value="0.03"/>
+    <param name="place_drop" value="0.02"/>
     <param name="approach_dist" value="0.16"/>
-    <param name="place_offset_y" value="-0.05"/>
+    <param name="place_offset_y" value="-0.10"/>
   </node>
 
   <!-- Flow manager -->
-  <!-- <node pkg="grasp" name="flower_manager" type="flower_manager.py" output="screen" required="true">
+  <node pkg="grasp" name="flower_manager" type="flower_manager.py" output="screen" required="true">
     <param name="flow_success_msg" value="CEREAL"/>
     <param name="flow_failed_msg" value="CEREAL"/>
-  </node> -->
+  </node>
 
 </launch>
