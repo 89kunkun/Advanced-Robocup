@@ -100,3 +100,40 @@ roslaunch grasp grasp_sprite.launch
 # or
 roslaunch grasp grasp_plate.launch
 ```
+
+# Acknowledgments and Third-Party Components
+
+This project incorporates code and components from the following open-source projects:
+
+## YOLOv8 Image Segmentation
+- **Source:** [image-segmentation-yolov8](https://github.com/computervisioneng/image-segmentation-yolov8.git)
+- **Usage:** Training scripts and Jupyter Notebooks for YOLOv8 model training
+- **Location:** `image-segmentation-yolov8-main/` directory
+- **License:** GNU Affero General Public License v3.0 (AGPL-3.0)
+- **⚠️ Important:** This component requires that any derivative work (including this project) be licensed under AGPL-3.0
+
+## Ultralytics YOLOv8
+- **Source:** [Ultralytics](https://github.com/ultralytics/ultralytics)
+- **Usage:** Object detection and segmentation models
+- **Installation:** `pip install -U ultralytics`
+- **License:** AGPL-3.0
+
+## wit.ros (TODO: Add proper attribution)
+- **Source:** [Add GitHub link here]
+- **Usage:** [Describe usage]
+- **License:** [Add license information]
+
+# License
+
+**⚠️ IMPORTANT LICENSE NOTICE:**
+
+This project incorporates components licensed under GNU Affero General Public License v3.0 (AGPL-3.0), which requires that:
+
+1. **The entire project must be licensed under AGPL-3.0**
+2. **Complete source code must be made available** to anyone who receives the software
+3. **If you provide this software as a service over a network** (e.g., web service), you must make the complete source code available to users
+4. **All copyright and license notices must be preserved**
+
+**This project is therefore licensed under AGPL-3.0** - see the [LICENSE](../LICENSE) file for details.
+
+**Note:** Due to AGPL-3.0 requirements, if you use this project in any commercial or network-based service, you must make the complete source code available to your users.
