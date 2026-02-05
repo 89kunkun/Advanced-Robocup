@@ -1,0 +1,37 @@
+Advanced RoboCup@Home - Restaurant Task
+Copyright (C) 2026 [Your Name/Team Name]
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+================================================================================
+
+THIRD-PARTY COMPONENTS AND THEIR LICENSES:
+
+1. YOLOv8 Image Segmentation Training Code
+   Source: https://github.com/computervisioneng/image-segmentation-yolov8
+   License: GNU Affero General Public License v3.0
+   Location: image-segmentation-yolov8-main/
+
+2. Ultralytics YOLOv8
+   Source: https://github.com/ultralytics/ultralytics
+   License: AGPL-3.0
+   Usage: Object detection and segmentation models
+
+3. wit.ros
+   Source: [To be added]
+   License: [To be added]
+   Usage: [To be added]
+
+For more information about licenses, see the LICENSE file in the root directory
+and the individual license files in the respective component directories.
