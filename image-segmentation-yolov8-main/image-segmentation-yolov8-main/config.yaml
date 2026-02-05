@@ -1,0 +1,6 @@
+path: /content/gdrive/MyDrive/yolo_v8_seg_train/data
+train: images/train 
+val: images/validate  
+
+nc: 4
+names: ['tray', 'cola', 'sprite', 'cereal']
