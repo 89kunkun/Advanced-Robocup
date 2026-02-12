@@ -2,7 +2,7 @@
 
 This is a readme file about our final project for advanced RoboCup@Home. In our task, we program TiaGo to finish the Restaurant task from Rule Book and TiaGO acts here as a server and serves customers with objects they ordered.
 
-The video of demo is on Youtube and can be visited via the link https://studio.youtube.com/video/4dQ4f4bH9A4/edit
+The video of demo is on Youtube and can be visited via the link [https://studio.youtube.com/video/4dQ4f4bH9A4/edit](https://youtu.be/4dQ4f4bH9A4)
 
 The code is also uploaded to Github via the link https://github.com/89kunkun/Advanced-Robocup.git
 
